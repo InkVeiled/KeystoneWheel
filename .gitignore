@@ -1,0 +1,17 @@
+# Release output
+dist/
+*.zip
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~
+*.swp
+
+# Local tooling
+*.luac
+.luacheckcache
+

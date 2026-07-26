@@ -1,0 +1,101 @@
+name: Release addon
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Package and release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ADDON_NAME: KeystoneWheel
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Validate tag and TOC version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Tag must use the form v1.2.3."
+            exit 1
+          fi
+
+          tag_version="${BASH_REMATCH[1]}"
+          toc_version="$(awk -F': *' '/^## Version:/ { print $2; exit }' "${ADDON_NAME}.toc" | tr -d '\r')"
+
+          if [[ -z "${toc_version}" ]]; then
+            echo "::error::No Version field found in ${ADDON_NAME}.toc."
+            exit 1
+          fi
+
+          if [[ "${toc_version}" != "${tag_version}" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match TOC version ${toc_version}."
+            exit 1
+          fi
+
+      - name: Build and verify WowUp archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          python - <<'PY'
+          import os
+          from pathlib import Path, PurePosixPath
+          from zipfile import ZIP_DEFLATED, ZipFile
+
+          addon = os.environ["ADDON_NAME"]
+          tag = os.environ["GITHUB_REF_NAME"]
+          source_files = [
+              Path(f"{addon}.toc"),
+              Path("Core.lua"),
+              Path("UI.lua"),
+              Path("README.md"),
+              Path("LICENSE"),
+          ]
+
+          missing = [str(path) for path in source_files if not path.is_file()]
+          if missing:
+              raise SystemExit(f"Missing release files: {', '.join(missing)}")
+
+          archive = Path("dist") / f"{addon}-{tag}.zip"
+          with ZipFile(archive, "w", compression=ZIP_DEFLATED, compresslevel=9) as package:
+              for source in source_files:
+                  package.write(source, arcname=f"{addon}/{source.as_posix()}")
+
+          expected_toc = f"{addon}/{addon}.toc"
+          with ZipFile(archive) as package:
+              names = package.namelist()
+              if expected_toc not in names:
+                  raise SystemExit(f"Archive does not contain {expected_toc}")
+              if any(PurePosixPath(name).parts[0] != addon for name in names):
+                  raise SystemExit(f"Archive contains files outside {addon}/")
+
+          print(f"Verified {archive}: {len(source_files)} files below {addon}/")
+          PY
+
+          echo "RELEASE_ARCHIVE=dist/${ADDON_NAME}-${GITHUB_REF_NAME}.zip" >> "${GITHUB_ENV}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}"
+          "${RELEASE_ARCHIVE}"
+          --verify-tag
+          --generate-notes
+          --title "${ADDON_NAME} ${GITHUB_REF_NAME}"
