@@ -2,7 +2,7 @@
 ## Title: KeystoneWheel
 ## Notes: Sammelt die M+ Schlüssel der Gruppe und lässt ein Glücksrad entscheiden.
 ## Author: KeystoneWheel contributors
-## Version: 0.2.0
+## Version: 0.2.1
 ## X-Website: https://github.com/InkVeiled/KeystoneWheel
 ## X-Source: https://github.com/InkVeiled/KeystoneWheel
 ## OptionalDeps: BigWigs, BossHelper, LibKeystone, MythicMentor

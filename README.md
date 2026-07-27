@@ -14,8 +14,8 @@ Warcraft Retail ausgelegt.
 - Erkennt als Fallback Keystone-Links im Gruppenchat.
 - Unterstützt manuell eingefügte Keystone-Links.
 - Lässt einzelne Steine per Linksklick ignorieren und wieder zulassen.
-- Zeigt ein animiertes Glücksrad mit Sound, Konfetti und optionaler
-  Ergebnisnachricht im Gruppenkanal.
+- Zeigt ein animiertes Glücksrad mit kompakten quadratischen Steinkacheln,
+  Sound, Konfetti und optionaler Ergebnisnachricht im Gruppenkanal.
 - Bietet einen verschiebbaren Minimap-Button und Diagnosebefehle.
 
 Die Datenquellen werden pro Spieler in dieser Reihenfolge verwendet:
@@ -86,14 +86,14 @@ enthalten.
 Beispiel:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v1.2.3
+git push origin v1.2.3
 ```
 
 Der Workflow:
 
 1. prüft das Tagformat und die TOC-Version,
-2. erzeugt `KeystoneWheel-v0.2.0.zip`,
+2. erzeugt `KeystoneWheel-v1.2.3.zip`,
 3. prüft `KeystoneWheel/KeystoneWheel.toc` im Archiv und
 4. erstellt ein GitHub Release mit automatisch generierten Release Notes.
 

@@ -2,7 +2,8 @@ local _, Addon = ...
 
 local TWO_PI = math.pi * 2
 local POINTER_ANGLE = math.pi / 2
-local SLOT_RADIUS = 126
+local SLOT_RADIUS = 118
+local SLOT_SIZE = 86
 local MAX_SLOTS = 5
 local TRACKING_BORDER_CROP = 0.625
 local MINIMAP_RADIUS = 5
@@ -240,7 +241,7 @@ end
 
 function Addon:CreateSlot(parent, index)
 	local slot = CreateFrame("Button", nil, parent, "BackdropTemplate")
-	slot:SetSize(154, 62)
+	slot:SetSize(SLOT_SIZE, SLOT_SIZE)
 	slot:SetFrameLevel(parent:GetFrameLevel() + 3)
 	slot:SetBackdrop({
 		bgFile = "Interface\\Buttons\\WHITE8X8",
@@ -255,8 +256,8 @@ function Addon:CreateSlot(parent, index)
 	slot:SetBackdropBorderColor(color[1], color[2], color[3], 0.78)
 
 	slot.icon = slot:CreateTexture(nil, "ARTWORK")
-	slot.icon:SetSize(48, 48)
-	slot.icon:SetPoint("LEFT", 6, 0)
+	slot.icon:SetSize(42, 42)
+	slot.icon:SetPoint("TOP", 0, -5)
 	slot.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
 	slot.iconShade = slot:CreateTexture(nil, "OVERLAY")
@@ -264,9 +265,9 @@ function Addon:CreateSlot(parent, index)
 	slot.iconShade:SetColorTexture(0, 0, 0, 0.13)
 
 	slot.player = slot:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	slot.player:SetPoint("TOPLEFT", slot.icon, "TOPRIGHT", 7, -1)
-	slot.player:SetPoint("RIGHT", slot, "RIGHT", -6, 0)
-	slot.player:SetJustifyH("LEFT")
+	slot.player:SetPoint("TOPLEFT", slot, "TOPLEFT", 4, -50)
+	slot.player:SetPoint("TOPRIGHT", slot, "TOPRIGHT", -4, -50)
+	slot.player:SetJustifyH("CENTER")
 	slot.player:SetWordWrap(false)
 	if slot.player.SetMaxLines then
 		slot.player:SetMaxLines(1)
@@ -274,16 +275,21 @@ function Addon:CreateSlot(parent, index)
 
 	slot.key = slot:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	slot.key:SetPoint("TOPLEFT", slot.player, "BOTTOMLEFT", 0, -2)
-	slot.key:SetPoint("BOTTOMRIGHT", slot, "BOTTOMRIGHT", -5, 5)
-	slot.key:SetJustifyH("LEFT")
+	slot.key:SetPoint("BOTTOMRIGHT", slot, "BOTTOMRIGHT", -4, 5)
+	slot.key:SetJustifyH("CENTER")
 	slot.key:SetJustifyV("TOP")
 	slot.key:SetWordWrap(true)
 	if slot.key.SetMaxLines then
 		slot.key:SetMaxLines(2)
 	end
 
+	slot.level = slot:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	slot.level:SetPoint("TOPLEFT", slot.icon, "TOPLEFT", 2, -2)
+	slot.level:SetTextColor(1, 0.84, 0.3)
+	slot.level:SetShadowOffset(1, -1)
+
 	slot.source = slot:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	slot.source:SetPoint("BOTTOMRIGHT", slot.icon, "BOTTOMRIGHT", -2, 2)
+	slot.source:SetPoint("BOTTOMRIGHT", slot.icon, "BOTTOMRIGHT", -1, 1)
 	slot.source:SetTextColor(1, 0.9, 0.62)
 
 	slot.flash = slot:CreateTexture(nil, "OVERLAY")
@@ -351,7 +357,7 @@ function Addon:CreateCenterButton(parent)
 
 	button.ring = button:CreateTexture(nil, "ARTWORK")
 	button.ring:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-	button.ring:SetSize(122, 122)
+	button.ring:SetSize(112, 112)
 	button.ring:SetPoint("CENTER")
 	button.ring:SetTexCoord(0, TRACKING_BORDER_CROP, 0, TRACKING_BORDER_CROP)
 	button.ring:SetVertexColor(1, 0.69, 0.22)
@@ -472,15 +478,24 @@ function Addon:CreateUI()
 	local wheelBackground = wheelHub:CreateTexture(nil, "BACKGROUND")
 	wheelBackground:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
 	wheelBackground:SetAllPoints()
-	wheelBackground:SetVertexColor(0.055, 0.065, 0.09, 0.98)
+	wheelBackground:SetVertexColor(0.055, 0.065, 0.09, 1)
+
+	local orbitRing = wheelHub:CreateTexture(nil, "BORDER")
+	orbitRing:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+	orbitRing:SetSize(250, 250)
+	orbitRing:SetPoint("CENTER")
+	orbitRing:SetTexCoord(0, TRACKING_BORDER_CROP, 0, TRACKING_BORDER_CROP)
+	orbitRing:SetVertexColor(1, 0.69, 0.22)
+	orbitRing:SetAlpha(0.28)
+	self.orbitRing = orbitRing
 
 	local outerRing = wheelHub:CreateTexture(nil, "BORDER")
 	outerRing:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
 	outerRing:SetSize(356, 356)
 	outerRing:SetPoint("CENTER")
 	outerRing:SetTexCoord(0, TRACKING_BORDER_CROP, 0, TRACKING_BORDER_CROP)
-	outerRing:SetVertexColor(0.38, 0.52, 0.72)
-	outerRing:SetAlpha(0.58)
+	outerRing:SetVertexColor(0.46, 0.68, 0.92)
+	outerRing:SetAlpha(0.78)
 	self.outerRing = outerRing
 
 	local pointer = wheelHub:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
@@ -632,7 +647,8 @@ function Addon:ApplySlotEntry(slot, entry)
 	slot.icon:SetTexture(entry.texture or 134400)
 	slot.player:SetText(entry.displayName)
 	SetClassColor(slot.player, entry.classFile)
-	slot.key:SetText(("+%d %s"):format(entry.level, entry.dungeonName))
+	slot.level:SetText(("+%d"):format(entry.level))
+	slot.key:SetText(entry.dungeonName)
 	slot.source:SetText(SOURCE_SHORT[entry.source] or "?")
 	slot.ignoreOverlay:SetShown(entry.ignored)
 	slot.ignoreText:SetShown(entry.ignored)
