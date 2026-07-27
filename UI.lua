@@ -82,6 +82,10 @@ local function SetClassColor(fontString, classFile)
 	end
 end
 
+local function IsSafeNumber(value)
+	return type(value) == "number" and (not issecretvalue or not issecretvalue(value))
+end
+
 function Addon:UpdateMinimapButtonPosition()
 	local button = self.minimapButton
 	if not button then
@@ -524,15 +528,65 @@ function Addon:CreateUI()
 	resultFrame:SetBackdropBorderColor(0.28, 0.35, 0.48, 0.8)
 	self.resultFrame = resultFrame
 
+	local portButton = CreateFrame(
+		"Button",
+		"KeystoneWheelPortButton",
+		resultFrame,
+		"InsecureActionButtonTemplate,BackdropTemplate"
+	)
+	portButton:SetSize(84, 32)
+	portButton:SetPoint("RIGHT", -9, 0)
+	portButton:RegisterForClicks("AnyDown", "AnyUp")
+	portButton:SetBackdrop({
+		bgFile = "Interface\\Buttons\\WHITE8X8",
+		edgeFile = "Interface\\Buttons\\WHITE8X8",
+		edgeSize = 1,
+	})
+	portButton:SetBackdropColor(0.10, 0.13, 0.17, 0.98)
+	portButton:SetBackdropBorderColor(0.42, 0.66, 0.92, 0.9)
+
+	local portIcon = portButton:CreateTexture(nil, "ARTWORK")
+	portIcon:SetSize(22, 22)
+	portIcon:SetPoint("LEFT", 5, 0)
+	portIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	portButton.icon = portIcon
+
+	local portCooldown = CreateFrame("Cooldown", nil, portButton, "CooldownFrameTemplate")
+	portCooldown:SetAllPoints(portIcon)
+	portCooldown:SetDrawEdge(false)
+	portButton.cooldown = portCooldown
+	self.portCooldown = portCooldown
+
+	local portText = portButton:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	portText:SetPoint("LEFT", portIcon, "RIGHT", 5, 0)
+	portText:SetPoint("RIGHT", -5, 0)
+	portText:SetJustifyH("CENTER")
+	portText:SetText("PORT")
+	portButton.text = portText
+	portButton:SetScript("OnEnter", function(self)
+		Addon:ShowPortTooltip(self)
+		if self:IsEnabled() then
+			self:SetBackdropBorderColor(1, 0.76, 0.22, 1)
+		end
+	end)
+	portButton:SetScript("OnLeave", function(self)
+		GameTooltip_Hide()
+		self:SetBackdropBorderColor(0.42, 0.66, 0.92, 0.9)
+	end)
+	portButton:Hide()
+	self.portButton = portButton
+
 	local resultTitle = resultFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	resultTitle:SetPoint("TOP", 0, -6)
+	resultTitle:SetPoint("TOPLEFT", 8, -6)
+	resultTitle:SetPoint("TOPRIGHT", portButton, "TOPLEFT", -7, -6)
+	resultTitle:SetJustifyH("CENTER")
 	resultTitle:SetText("BEREIT FÜR DEN DREH")
 	resultTitle:SetTextColor(0.58, 0.68, 0.82)
 	self.resultTitle = resultTitle
 
 	local resultText = resultFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-	resultText:SetPoint("TOP", resultTitle, "BOTTOM", 0, -3)
-	resultText:SetWidth(480)
+	resultText:SetPoint("TOPLEFT", resultTitle, "BOTTOMLEFT", 0, -3)
+	resultText:SetPoint("TOPRIGHT", resultTitle, "BOTTOMRIGHT", 0, -3)
 	resultText:SetJustifyH("CENTER")
 	resultText:SetText("Noch wurde niemand vom Rad auserwählt.")
 	self.resultText = resultText
@@ -659,12 +713,12 @@ function Addon:SetSelectedSlot(selectedIndex, winnerIndex)
 	for index, slot in ipairs(self.slots) do
 		if slot:IsShown() then
 			local color = slot.color
-			if slot.entry and slot.entry.ignored then
-				slot:SetBackdropBorderColor(0.72, 0.16, 0.16, 0.9)
-				slot.flash:SetAlpha(0)
-			elseif index == winnerIndex then
+			if index == winnerIndex then
 				slot:SetBackdropBorderColor(1, 0.82, 0.22, 1)
 				slot.flash:SetAlpha(0.2)
+			elseif slot.entry and slot.entry.ignored then
+				slot:SetBackdropBorderColor(0.72, 0.16, 0.16, 0.9)
+				slot.flash:SetAlpha(0)
 			elseif index == selectedIndex then
 				slot:SetBackdropBorderColor(1, 0.96, 0.72, 1)
 				slot.flash:SetAlpha(0.12)
@@ -674,6 +728,110 @@ function Addon:SetSelectedSlot(selectedIndex, winnerIndex)
 			end
 		end
 	end
+end
+
+function Addon:ShowPortTooltip(button)
+	if not button or not button.teleportSpellID then
+		return
+	end
+
+	GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
+	if GameTooltip.SetSpellByID then
+		GameTooltip:SetSpellByID(button.teleportSpellID)
+	else
+		GameTooltip:AddLine("Dungeon-Teleport", 1, 0.82, 0.3)
+	end
+	if not button.teleportKnown then
+		GameTooltip:AddLine("Dieser Teleport ist noch nicht freigeschaltet.", 1, 0.35, 0.35, true)
+	elseif InCombatLockdown and InCombatLockdown() then
+		GameTooltip:AddLine("Im Kampf nicht verfügbar.", 1, 0.35, 0.35)
+	else
+		local cooldownInfo = C_Spell and C_Spell.GetSpellCooldown
+			and C_Spell.GetSpellCooldown(button.teleportSpellID)
+		local remaining = cooldownInfo
+			and IsSafeNumber(cooldownInfo.duration)
+			and IsSafeNumber(cooldownInfo.startTime)
+			and math.max(0, cooldownInfo.startTime + cooldownInfo.duration - GetTime())
+		if remaining and remaining > 1.5 then
+			GameTooltip:AddLine(("Wieder bereit in %s."):format(SecondsToTime(remaining)), 1, 0.76, 0.25)
+		else
+			GameTooltip:AddLine("Bereit zum Teleport.", 0.35, 1, 0.55)
+		end
+	end
+	GameTooltip:Show()
+end
+
+function Addon:UpdatePortButtonCooldown()
+	local button = self.portButton
+	if not button or not button.teleportSpellID then
+		return
+	end
+
+	local cooldownInfo = C_Spell and C_Spell.GetSpellCooldown
+		and C_Spell.GetSpellCooldown(button.teleportSpellID)
+	if cooldownInfo and IsSafeNumber(cooldownInfo.startTime) and IsSafeNumber(cooldownInfo.duration)
+		and cooldownInfo.duration > 1.5 then
+		local modRate = IsSafeNumber(cooldownInfo.modRate) and cooldownInfo.modRate or 1
+		button.cooldown:SetCooldown(
+			cooldownInfo.startTime,
+			cooldownInfo.duration,
+			modRate
+		)
+	else
+		button.cooldown:Clear()
+	end
+end
+
+function Addon:UpdatePortButton(entry)
+	local button = self.portButton
+	if not button then
+		return
+	end
+
+	self.selectedWinner = entry
+	if InCombatLockdown and InCombatLockdown() then
+		self.pendingTeleportEntry = entry
+		button:Disable()
+		button:Hide()
+		return
+	end
+	self.pendingTeleportEntry = nil
+
+	button:SetAttribute("type", nil)
+	button:SetAttribute("spell", nil)
+	button.teleportSpellID = nil
+	button.teleportKnown = false
+	button.cooldown:Clear()
+
+	if not entry then
+		button:Hide()
+		return
+	end
+
+	local spellID, known = self:GetDungeonTeleportSpell(entry.mapID)
+	if not spellID then
+		button:Hide()
+		return
+	end
+
+	local spellInfo = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(spellID)
+	button.teleportSpellID = spellID
+	button.teleportKnown = known
+	button.icon:SetTexture(spellInfo and spellInfo.iconID or 134414)
+	button.icon:SetDesaturated(not known)
+	button.text:SetText("PORT")
+	button:Show()
+
+	if known then
+		button:SetAttribute("type", "spell")
+		button:SetAttribute("spell", spellID)
+		button:Enable()
+		button:SetAlpha(1)
+	else
+		button:Disable()
+		button:SetAlpha(0.52)
+	end
+	self:UpdatePortButtonCooldown()
 end
 
 function Addon:LayoutWheel(angle)
@@ -705,6 +863,34 @@ function Addon:GetPointerIndex(angle)
 		end
 	end
 	return closestIndex
+end
+
+function Addon:FindWheelWinnerIndex(winner)
+	if not winner then
+		return nil
+	end
+
+	local winnerID = type(winner.id) == "string" and winner.id:lower()
+	local winnerShortName = winnerID and Ambiguate(winner.id, "short")
+	winnerShortName = winnerShortName and winnerShortName:lower()
+	local mapLevelIndex
+	local mapLevelMatches = 0
+	for index, entry in ipairs(self.wheelEntries or {}) do
+		if entry.mapID == winner.mapID and entry.level == winner.level then
+			mapLevelIndex = index
+			mapLevelMatches = mapLevelMatches + 1
+			local entryID = type(entry.id) == "string" and entry.id:lower()
+			local entryShortName = entryID and Ambiguate(entry.id, "short")
+			entryShortName = entryShortName and entryShortName:lower()
+			if entryID and (entryID == winnerID
+				or (winnerShortName and entryShortName == winnerShortName)) then
+				return index
+			end
+		end
+	end
+	if mapLevelMatches == 1 then
+		return mapLevelIndex
+	end
 end
 
 function Addon:RefreshUI()
@@ -755,7 +941,9 @@ function Addon:RefreshUI()
 	end
 
 	self:LayoutWheel(self.wheelAngle)
-	self:SetSelectedSlot(nil, nil)
+	local selectedIndex = self:FindWheelWinnerIndex(self.selectedWinner)
+	self.winnerIndex = selectedIndex
+	self:SetSelectedSlot(selectedIndex, selectedIndex)
 	if eligibleCount > 0 then
 		self.centerButton:Enable()
 		self.centerButton.text:SetText("DREHEN")
@@ -813,6 +1001,8 @@ function Addon:Spin()
 
 	self.spinning = true
 	self.winnerIndex = nil
+	self:UpdatePortButton(nil)
+	self:SetSelectedSlot(nil, nil)
 	self.centerButton:Disable()
 	self.centerButton.text:SetText("DREHT...")
 	self.centerButton.subtext:SetText("viel Glück")
@@ -839,31 +1029,88 @@ function Addon:Spin()
 	}
 end
 
+function Addon:PresentWinner(winner, winnerIndex, syncedBy)
+	self.winnerIndex = winnerIndex
+	self.selectedWinner = winner
+	self:SetSelectedSlot(winnerIndex, winnerIndex)
+
+	if syncedBy then
+		self.resultTitle:SetText(("GETEILTER DREH VON %s"):format(Ambiguate(syncedBy, "short") or syncedBy))
+		self.resultTitle:SetTextColor(0.38, 0.78, 1)
+	else
+		self.resultTitle:SetText("DAS RAD HAT ENTSCHIEDEN")
+		self.resultTitle:SetTextColor(1, 0.72, 0.22)
+	end
+	self.resultText:SetText(("%s  |  +%d %s"):format(winner.displayName, winner.level, winner.dungeonName))
+
+	local hasEligibleEntry = false
+	for _, entry in ipairs(self.wheelEntries or {}) do
+		if not entry.ignored then
+			hasEligibleEntry = true
+			break
+		end
+	end
+	if hasEligibleEntry then
+		self.centerButton:Enable()
+		self.centerButton.text:SetText("NOCHMAL")
+		self.centerButton.subtext:SetText("warum nicht?")
+		self.centerButton:SetAlpha(1)
+	else
+		self.centerButton:Disable()
+		self.centerButton.text:SetText("ERGEBNIS")
+		self.centerButton.subtext:SetText("empfangen")
+		self.centerButton:SetAlpha(0.55)
+	end
+
+	self:UpdatePortButton(winner)
+	if self.frame:IsShown() then
+		self.resultPulse = 2.5
+		self:LaunchConfetti()
+		if self.db.sound then
+			local sound = SOUNDKIT and (SOUNDKIT.UI_BONUS_LOOT_ROLL_END or SOUNDKIT.READY_CHECK)
+			if sound then
+				PlaySound(sound, "SFX")
+			end
+		end
+	end
+end
+
+function Addon:ShowSyncedWinner(winner, sender)
+	if self.spinning then
+		self:DebugLog("Geteilter Dreh von %s ignoriert, weil das eigene Rad gerade dreht.", sender)
+		return
+	end
+
+	local wasShown = self.frame:IsShown()
+	self:RefreshUI()
+	local winnerIndex = self:FindWheelWinnerIndex(winner)
+	if winnerIndex then
+		winner = self.wheelEntries[winnerIndex]
+		local count = #self.wheelEntries
+		self.wheelAngle = (-((winnerIndex - 1) * TWO_PI / count)) % TWO_PI
+		self:LayoutWheel(self.wheelAngle)
+	end
+	self:PresentWinner(winner, winnerIndex, sender)
+
+	if not wasShown then
+		self:Print(("%s hat %s: +%d %s ausgewählt."):format(
+			Ambiguate(sender, "short") or sender,
+			winner.displayName,
+			winner.level,
+			winner.dungeonName
+		))
+	end
+end
+
 function Addon:FinishSpin(animation)
 	self.spinning = false
 	self.spinAnimation = nil
 	self.wheelAngle = animation.targetAngle % TWO_PI
-	self.winnerIndex = animation.winnerIndex
 	self:LayoutWheel(self.wheelAngle)
-	self:SetSelectedSlot(self.winnerIndex, self.winnerIndex)
-
-	local winner = self.wheelEntries[self.winnerIndex]
-	self.resultTitle:SetText("DAS RAD HAT ENTSCHIEDEN")
-	self.resultTitle:SetTextColor(1, 0.72, 0.22)
-	self.resultText:SetText(("%s  |  +%d %s"):format(winner.displayName, winner.level, winner.dungeonName))
-	self.centerButton:Enable()
-	self.centerButton.text:SetText("NOCHMAL")
-	self.centerButton.subtext:SetText("warum nicht?")
-	self.resultPulse = 2.5
-	self:LaunchConfetti()
-
-	if self.db.sound then
-		local sound = SOUNDKIT and (SOUNDKIT.UI_BONUS_LOOT_ROLL_END or SOUNDKIT.READY_CHECK)
-		if sound then
-			PlaySound(sound, "SFX")
-		end
-	end
+	local winner = self.wheelEntries[animation.winnerIndex]
+	self:PresentWinner(winner, animation.winnerIndex)
 	self:AnnounceWinner(winner)
+	self:BroadcastWinner(winner)
 end
 
 function Addon:LaunchConfetti()

@@ -9,6 +9,8 @@ Warcraft Retail ausgelegt.
 - Erkennt den eigenen Mythic+-Schlüssel direkt über die WoW-API.
 - Tauscht Schlüssel mit anderen KeystoneWheel-Nutzern über das gemeinsame
   `LibKS`-Protokoll aus.
+- Synchronisiert das Ergebnis eines Drehs automatisch mit allen
+  KeystoneWheel-Nutzern in Gruppe, Raid oder Instanzgruppe.
 - Verwendet vorhandene LibKeystone-Daten, wie sie unter anderem BigWigs und
   BossHelper bereitstellen.
 - Erkennt als Fallback Keystone-Links im Gruppenchat.
@@ -16,6 +18,8 @@ Warcraft Retail ausgelegt.
 - Lässt einzelne Steine per Linksklick ignorieren und wieder zulassen.
 - Zeigt ein animiertes Glücksrad mit kompakten quadratischen Steinkacheln,
   Sound, Konfetti und optionaler Ergebnisnachricht im Gruppenkanal.
+- Bietet beim ausgewählten Dungeon einen Port-Button mit Zaubericon und
+  Cooldown. Noch nicht freigeschaltete Portale werden deaktiviert angezeigt.
 - Bietet einen verschiebbaren Minimap-Button und Diagnosebefehle.
 
 Die Datenquellen werden pro Spieler in dieser Reihenfolge verwendet:
@@ -28,6 +32,11 @@ Die Datenquellen werden pro Spieler in dieser Reihenfolge verwendet:
 KeystoneWheel registriert kein zusätzliches eigenes Kommunikations-Prefix.
 Ist `LibKS` bereits durch ein anderes Addon vorhanden, wird kein weiterer
 Platz aus WoWs begrenztem Prefix-Pool verbraucht.
+
+Auch die Dreh-Ergebnisse werden als eindeutig markierte KeystoneWheel-
+Nachricht über `LibKS` übertragen. Andere LibKeystone-Addons ignorieren diese
+Erweiterung, während KeystoneWheel-Nutzer in derselben Gruppe das gleiche
+Ergebnis sehen.
 
 ## Installation mit WowUp
 
@@ -63,6 +72,16 @@ Er bleibt sichtbar, wird aber nicht mehr gezogen. Ein weiterer Linksklick
 lässt ihn wieder zu. Ändern sich Dungeon oder Stufe des Spielers, gilt der
 neue Stein automatisch als eigener, nicht ignorierter Kandidat. Chat- und
 manuelle Einträge können weiterhin mit Rechtsklick entfernt werden.
+
+Nach einem Dreh wird das Ergebnis an andere KeystoneWheel-Nutzer in der
+Gruppe übertragen. Ist deren Rad geöffnet, springt es auf denselben Stein und
+zeigt die Ergebnisanimation. Bei geschlossenem Rad erscheint nur eine kurze
+Chatmeldung; das Fenster wird nicht ungefragt geöffnet.
+
+Der Port-Button erscheint beim Ergebnis, sobald für den Dungeon ein
+Teleport-Zauber hinterlegt ist. Ein freigeschalteter Port kann direkt
+angeklickt werden. Im Kampf wird der geschützte Button vorübergehend
+ausgeblendet und danach automatisch wiederhergestellt.
 
 ## Befehle
 
@@ -100,3 +119,7 @@ Der Workflow:
 ## Lizenz
 
 KeystoneWheel steht unter der [MIT-Lizenz](LICENSE).
+
+Die Zuordnung der Dungeon-Teleporte wurde mit
+[DungeonTeleport](https://github.com/dfrezell/DungeonTeleport) abgeglichen,
+das ebenfalls unter der MIT-Lizenz veröffentlicht wird.

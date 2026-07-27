@@ -8,6 +8,18 @@ Addon.roster = {}
 Addon.rosterOrder = {}
 Addon.mapCache = {}
 
+local WHEEL_PROTOCOL_VERSION = "1"
+local DUNGEON_TELEPORTS = {
+	[161] = 159898,  -- Skyreach
+	[239] = 1254551, -- Seat of the Triumvirate
+	[402] = 393273,  -- Algeth'ar Academy
+	[556] = 1254555, -- Pit of Saron
+	[557] = 1254400, -- Windrunner Spire
+	[558] = 1254572, -- Magisters' Terrace
+	[559] = 1254563, -- Nexus-Point Xenas
+	[560] = 1254559, -- Maisara Caverns
+}
+
 local SOURCE_ORDER = { "self", "addon", "lib", "chat", "manual" }
 local SOURCE_LABELS = {
 	self = "Eigener Stein",
@@ -99,6 +111,25 @@ function Addon:GetDungeonInfo(mapID)
 		return name, texture or 134400
 	end
 	return ("Dungeon %d"):format(mapID), 134400
+end
+
+function Addon:GetDungeonTeleportSpell(mapID)
+	local spellID = DUNGEON_TELEPORTS[SafeNumber(mapID)]
+	if not spellID then
+		return nil, false
+	end
+
+	local known = false
+	if C_SpellBook and C_SpellBook.IsSpellKnownOrInSpellBook then
+		known = C_SpellBook.IsSpellKnownOrInSpellBook(spellID)
+	elseif C_SpellBook and C_SpellBook.IsSpellKnown then
+		known = C_SpellBook.IsSpellKnown(spellID)
+	elseif C_SpellBook and C_SpellBook.IsSpellInSpellBook then
+		known = C_SpellBook.IsSpellInSpellBook(spellID, nil, true)
+	elseif IsSpellKnown then
+		known = IsSpellKnown(spellID)
+	end
+	return spellID, known == true
 end
 
 function Addon:RefreshRoster()
@@ -447,6 +478,111 @@ function Addon:AnnounceWinner(entry)
 	end
 end
 
+function Addon:IsCurrentGroupMember(playerName)
+	if type(playerName) ~= "string" or playerName == "" then
+		return false
+	end
+
+	local rosterEntry = self.roster[playerName:lower()]
+	if rosterEntry then
+		return true
+	end
+	if IsInRaid() and UnitInRaid then
+		return UnitInRaid(playerName) ~= nil
+	end
+	if UnitInParty then
+		return UnitInParty(playerName) == true
+	end
+
+	local shortName = ShortName(playerName)
+	return shortName and self.roster[shortName:lower()] ~= nil
+end
+
+function Addon:BroadcastWinner(entry)
+	local channel = GroupChannel()
+	if not channel or not entry then
+		return
+	end
+
+	local winnerID = tostring(entry.id or entry.displayName or ""):gsub(";", "")
+	local level = SafeNumber(entry.level)
+	local mapID = SafeNumber(entry.mapID)
+	if winnerID == "" or level <= 0 or mapID <= 0 then
+		self:DebugLog("Dreh-Synchronisierung nicht gesendet: ungültiges Ergebnis.")
+		return
+	end
+
+	local rollID = ("%d-%04d"):format(GetServerTime(), math.random(0, 9999))
+	local message = ("KW;%s;ROLL;%s;%s;%d;%d"):format(
+		WHEEL_PROTOCOL_VERSION,
+		rollID,
+		winnerID,
+		level,
+		mapID
+	)
+	C_ChatInfo.SendAddonMessage(self.LIB_PREFIX, message, channel)
+	self:DebugLog("Dreh %s über %s synchronisiert: %s +%d/%d.", rollID, channel, winnerID, level, mapID)
+end
+
+function Addon:HandleWheelMessage(message, channel, sender)
+	if type(message) ~= "string" or type(sender) ~= "string" then
+		return
+	end
+	if channel ~= "PARTY" and channel ~= "RAID" and channel ~= "INSTANCE_CHAT" then
+		return
+	end
+
+	local marker, version, kind, rollID, winnerID, level, mapID = strsplit(";", message)
+	level, mapID = tonumber(level), tonumber(mapID)
+	if marker ~= "KW" or version ~= WHEEL_PROTOCOL_VERSION or kind ~= "ROLL"
+		or type(rollID) ~= "string" or #rollID < 1 or #rollID > 32
+		or not rollID:match("^[%w%-]+$")
+		or type(winnerID) ~= "string" or winnerID == "" or #winnerID > 80
+		or not level or level < 2 or level > 99
+		or not mapID or mapID < 1 or mapID > 100000 then
+		self:DebugLog("Ungültige KeystoneWheel-Synchronisierung von %s verworfen.", sender)
+		return
+	end
+
+	local playerName = FullUnitName("player")
+	local senderShortName = ShortName(sender)
+	local playerShortName = ShortName(playerName)
+	if playerName and (sender:lower() == playerName:lower()
+		or (senderShortName and playerShortName and senderShortName:lower() == playerShortName:lower())) then
+		return
+	end
+	if not self:IsCurrentGroupMember(sender) then
+		self:DebugLog("Dreh von Nicht-Gruppenmitglied %s verworfen.", sender)
+		return
+	end
+
+	local now = GetTime()
+	self.seenRolls = self.seenRolls or {}
+	for key, seenAt in pairs(self.seenRolls) do
+		if now - seenAt > 60 then
+			self.seenRolls[key] = nil
+		end
+	end
+	local rollKey = sender:lower() .. ":" .. rollID
+	if self.seenRolls[rollKey] then
+		return
+	end
+	self.seenRolls[rollKey] = now
+
+	local dungeonName, texture = self:GetDungeonInfo(mapID)
+	local winner = {
+		id = winnerID,
+		displayName = ShortName(winnerID) or winnerID,
+		level = math.floor(level),
+		mapID = math.floor(mapID),
+		dungeonName = dungeonName,
+		texture = texture,
+		source = "addon",
+	}
+	self:DebugLog("Synchronisierten Dreh %s von %s empfangen.", rollID, sender)
+	self:ShowSyncedWinner(winner, sender)
+end
+
 function Addon:OnAddonMessage(prefix, message, channel, sender)
 	if issecretvalue and (issecretvalue(prefix) or issecretvalue(message) or issecretvalue(channel) or issecretvalue(sender)) then
 		self:DebugLog("Geschützte Addon-Nachricht übersprungen.")
@@ -465,6 +601,10 @@ function Addon:OnAddonMessage(prefix, message, channel, sender)
 			self:UpdateEntry(sender, level, mapID, "addon", rating)
 		end
 	elseif prefix == self.LIB_PREFIX then
+		if type(message) == "string" and message:sub(1, 3) == "KW;" then
+			self:HandleWheelMessage(message, channel, sender)
+			return
+		end
 		if message == "R" then
 			if not self.libKeystone and channel == "PARTY" then
 				C_Timer.After(math.random() * 0.35, function()
@@ -674,6 +814,9 @@ function Addon:Initialize()
 		"CHALLENGE_MODE_COMPLETED",
 		"ITEM_CHANGED",
 		"ITEM_PUSH",
+		"PLAYER_REGEN_ENABLED",
+		"SPELLS_CHANGED",
+		"SPELL_UPDATE_COOLDOWN",
 	}
 	for _, event in ipairs(events) do
 		eventFrame:RegisterEvent(event)
@@ -716,6 +859,10 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
 		Addon:ScheduleOwnUpdate(2, true)
 	elseif event == "BAG_UPDATE_DELAYED" or event == "ITEM_CHANGED" or event == "ITEM_PUSH" then
 		Addon:ScheduleOwnUpdate(0.5, true)
+	elseif event == "PLAYER_REGEN_ENABLED" or event == "SPELLS_CHANGED" then
+		Addon:UpdatePortButton(Addon.selectedWinner)
+	elseif event == "SPELL_UPDATE_COOLDOWN" then
+		Addon:UpdatePortButtonCooldown()
 	elseif event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
 		Addon:RefreshRoster()
 		Addon:UpdateMinimapButtonPosition()
