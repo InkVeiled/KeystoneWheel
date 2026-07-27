@@ -17,7 +17,7 @@ Warcraft Retail ausgelegt.
 - Unterstützt manuell eingefügte Keystone-Links.
 - Lässt einzelne Steine per Linksklick ignorieren und wieder zulassen.
 - Zeigt ein animiertes Glücksrad mit kompakten quadratischen Steinkacheln,
-  gut lesbaren Stufen-Badges, glatten gezeichneten Ringen, Sound, Konfetti
+  gut lesbaren Stufen-Badges, hochauflösender Radgrafik, Sound, Konfetti
   und optionaler Ergebnisnachricht im Gruppenkanal.
 - Bietet beim ausgewählten Dungeon einen Port-Button mit Zaubericon und
   Cooldown. Noch nicht freigeschaltete Portale werden deaktiviert angezeigt.

@@ -8,6 +8,7 @@ local MAX_SLOTS = 5
 local TRACKING_BORDER_CROP = 0.625
 local MINIMAP_RADIUS = 5
 local KEYSTONE_ITEM_ID = 180653
+local WHEEL_TEXTURE = "Interface\\AddOns\\KeystoneWheel\\Media\\WheelBackdrop.tga"
 
 local MINIMAP_SHAPES = {
 	ROUND = { true, true, true, true },
@@ -84,56 +85,6 @@ end
 
 local function IsSafeNumber(value)
 	return type(value) == "number" and (not issecretvalue or not issecretvalue(value))
-end
-
-local function CreateSmoothRing(parent, radius, thickness, red, green, blue, alpha, segments, drawLayer)
-	local ring = CreateFrame("Frame", nil, parent)
-	ring:SetAllPoints(parent)
-	ring.lines = {}
-	ring.color = { red, green, blue, alpha }
-
-	for index = 1, segments do
-		local startAngle = ((index - 1) / segments) * TWO_PI
-		local endAngle = (index / segments) * TWO_PI
-		local line = ring:CreateLine(nil, drawLayer or "BORDER")
-		line:SetThickness(thickness)
-		line:SetColorTexture(red, green, blue, alpha)
-		line:SetStartPoint(
-			"CENTER",
-			ring,
-			"CENTER",
-			math.cos(startAngle) * radius,
-			math.sin(startAngle) * radius
-		)
-		line:SetEndPoint(
-			"CENTER",
-			ring,
-			"CENTER",
-			math.cos(endAngle) * radius,
-			math.sin(endAngle) * radius
-		)
-		if line.SetSnapToPixelGrid then
-			line:SetSnapToPixelGrid(false)
-		end
-		if line.SetTexelSnappingBias then
-			line:SetTexelSnappingBias(0)
-		end
-		line:Show()
-		ring.lines[index] = line
-	end
-
-	function ring:SetCircleColor(newRed, newGreen, newBlue, newAlpha)
-		self.color[1] = newRed
-		self.color[2] = newGreen
-		self.color[3] = newBlue
-		self.color[4] = newAlpha
-		for _, line in ipairs(self.lines) do
-			line:SetColorTexture(newRed, newGreen, newBlue, newAlpha)
-		end
-	end
-
-	ring:Show()
-	return ring
 end
 
 function Addon:UpdateMinimapButtonPosition()
@@ -418,10 +369,9 @@ function Addon:CreateCenterButton(parent)
 
 	button.shadow = button:CreateTexture(nil, "BACKGROUND")
 	button.shadow:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
-	button.shadow:SetAllPoints()
+	button.shadow:SetSize(86, 86)
+	button.shadow:SetPoint("CENTER")
 	button.shadow:SetVertexColor(0.02, 0.025, 0.04, 0.98)
-
-	button.ring = CreateSmoothRing(button, 50, 4, 1, 0.62, 0.12, 0.96, 80, "ARTWORK")
 
 	button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 	button.text:SetPoint("CENTER", 0, 2)
@@ -438,11 +388,13 @@ function Addon:CreateCenterButton(parent)
 	end)
 	button:SetScript("OnEnter", function(self)
 		if self:IsEnabled() then
-			self.ring:SetCircleColor(1, 0.84, 0.32, 1)
+			self.text:SetTextColor(1, 0.91, 0.42)
+			self.subtext:SetTextColor(0.9, 0.9, 0.94)
 		end
 	end)
 	button:SetScript("OnLeave", function(self)
-		self.ring:SetCircleColor(1, 0.62, 0.12, 0.96)
+		self.text:SetTextColor(1, 0.82, 0.3)
+		self.subtext:SetTextColor(0.75, 0.75, 0.78)
 	end)
 	return button
 end
@@ -537,15 +489,9 @@ function Addon:CreateUI()
 	self.wheelHub = wheelHub
 
 	local wheelBackground = wheelHub:CreateTexture(nil, "BACKGROUND")
-	wheelBackground:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
+	wheelBackground:SetTexture(WHEEL_TEXTURE)
 	wheelBackground:SetAllPoints()
-	wheelBackground:SetVertexColor(0.055, 0.065, 0.09, 1)
-
-	local orbitRing = CreateSmoothRing(wheelHub, 112, 3, 1, 0.55, 0.12, 0.32, 112, "BORDER")
-	self.orbitRing = orbitRing
-
-	local outerRing = CreateSmoothRing(wheelHub, 160, 4, 0.36, 0.72, 0.54, 0.5, 128, "BORDER")
-	self.outerRing = outerRing
+	self.wheelBackground = wheelBackground
 
 	local pointer = wheelHub:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 	pointer:SetPoint("TOP", wheelHub, "TOP", 0, 10)

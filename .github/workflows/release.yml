@@ -73,6 +73,7 @@ jobs:
               Path(f"{addon}.toc"),
               Path("Core.lua"),
               Path("UI.lua"),
+              Path("Media/WheelBackdrop.tga"),
               Path("README.md"),
               Path("LICENSE"),
           ]
