@@ -118,6 +118,7 @@ local function CreateSmoothRing(parent, radius, thickness, red, green, blue, alp
 		if line.SetTexelSnappingBias then
 			line:SetTexelSnappingBias(0)
 		end
+		line:Show()
 		ring.lines[index] = line
 	end
 
@@ -131,6 +132,7 @@ local function CreateSmoothRing(parent, radius, thickness, red, green, blue, alp
 		end
 	end
 
+	ring:Show()
 	return ring
 end
 
