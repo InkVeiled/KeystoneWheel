@@ -86,6 +86,54 @@ local function IsSafeNumber(value)
 	return type(value) == "number" and (not issecretvalue or not issecretvalue(value))
 end
 
+local function CreateSmoothRing(parent, radius, thickness, red, green, blue, alpha, segments, drawLayer)
+	local ring = CreateFrame("Frame", nil, parent)
+	ring:SetAllPoints(parent)
+	ring.lines = {}
+	ring.color = { red, green, blue, alpha }
+
+	for index = 1, segments do
+		local startAngle = ((index - 1) / segments) * TWO_PI
+		local endAngle = (index / segments) * TWO_PI
+		local line = ring:CreateLine(nil, drawLayer or "BORDER")
+		line:SetThickness(thickness)
+		line:SetColorTexture(red, green, blue, alpha)
+		line:SetStartPoint(
+			"CENTER",
+			ring,
+			"CENTER",
+			math.cos(startAngle) * radius,
+			math.sin(startAngle) * radius
+		)
+		line:SetEndPoint(
+			"CENTER",
+			ring,
+			"CENTER",
+			math.cos(endAngle) * radius,
+			math.sin(endAngle) * radius
+		)
+		if line.SetSnapToPixelGrid then
+			line:SetSnapToPixelGrid(false)
+		end
+		if line.SetTexelSnappingBias then
+			line:SetTexelSnappingBias(0)
+		end
+		ring.lines[index] = line
+	end
+
+	function ring:SetCircleColor(newRed, newGreen, newBlue, newAlpha)
+		self.color[1] = newRed
+		self.color[2] = newGreen
+		self.color[3] = newBlue
+		self.color[4] = newAlpha
+		for _, line in ipairs(self.lines) do
+			line:SetColorTexture(newRed, newGreen, newBlue, newAlpha)
+		end
+	end
+
+	return ring
+end
+
 function Addon:UpdateMinimapButtonPosition()
 	local button = self.minimapButton
 	if not button then
@@ -287,8 +335,20 @@ function Addon:CreateSlot(parent, index)
 		slot.key:SetMaxLines(2)
 	end
 
-	slot.level = slot:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	slot.level:SetPoint("TOPLEFT", slot.icon, "TOPLEFT", 2, -2)
+	slot.levelBadge = CreateFrame("Frame", nil, slot, "BackdropTemplate")
+	slot.levelBadge:SetSize(31, 20)
+	slot.levelBadge:SetPoint("TOPLEFT", slot, "TOPLEFT", 3, -3)
+	slot.levelBadge:SetFrameLevel(slot:GetFrameLevel() + 2)
+	slot.levelBadge:SetBackdrop({
+		bgFile = "Interface\\Buttons\\WHITE8X8",
+		edgeFile = "Interface\\Buttons\\WHITE8X8",
+		edgeSize = 1,
+	})
+	slot.levelBadge:SetBackdropColor(0.025, 0.03, 0.04, 0.96)
+	slot.levelBadge:SetBackdropBorderColor(1, 0.72, 0.18, 0.95)
+
+	slot.level = slot.levelBadge:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	slot.level:SetPoint("CENTER", 0, 0)
 	slot.level:SetTextColor(1, 0.84, 0.3)
 	slot.level:SetShadowOffset(1, -1)
 
@@ -359,12 +419,7 @@ function Addon:CreateCenterButton(parent)
 	button.shadow:SetAllPoints()
 	button.shadow:SetVertexColor(0.02, 0.025, 0.04, 0.98)
 
-	button.ring = button:CreateTexture(nil, "ARTWORK")
-	button.ring:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-	button.ring:SetSize(112, 112)
-	button.ring:SetPoint("CENTER")
-	button.ring:SetTexCoord(0, TRACKING_BORDER_CROP, 0, TRACKING_BORDER_CROP)
-	button.ring:SetVertexColor(1, 0.69, 0.22)
+	button.ring = CreateSmoothRing(button, 50, 4, 1, 0.62, 0.12, 0.96, 80, "ARTWORK")
 
 	button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 	button.text:SetPoint("CENTER", 0, 2)
@@ -381,11 +436,11 @@ function Addon:CreateCenterButton(parent)
 	end)
 	button:SetScript("OnEnter", function(self)
 		if self:IsEnabled() then
-			self.ring:SetVertexColor(1, 0.86, 0.38)
+			self.ring:SetCircleColor(1, 0.84, 0.32, 1)
 		end
 	end)
 	button:SetScript("OnLeave", function(self)
-		self.ring:SetVertexColor(1, 0.69, 0.22)
+		self.ring:SetCircleColor(1, 0.62, 0.12, 0.96)
 	end)
 	return button
 end
@@ -484,22 +539,10 @@ function Addon:CreateUI()
 	wheelBackground:SetAllPoints()
 	wheelBackground:SetVertexColor(0.055, 0.065, 0.09, 1)
 
-	local orbitRing = wheelHub:CreateTexture(nil, "BORDER")
-	orbitRing:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-	orbitRing:SetSize(250, 250)
-	orbitRing:SetPoint("CENTER")
-	orbitRing:SetTexCoord(0, TRACKING_BORDER_CROP, 0, TRACKING_BORDER_CROP)
-	orbitRing:SetVertexColor(1, 0.69, 0.22)
-	orbitRing:SetAlpha(0.28)
+	local orbitRing = CreateSmoothRing(wheelHub, 112, 3, 1, 0.55, 0.12, 0.32, 112, "BORDER")
 	self.orbitRing = orbitRing
 
-	local outerRing = wheelHub:CreateTexture(nil, "BORDER")
-	outerRing:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-	outerRing:SetSize(356, 356)
-	outerRing:SetPoint("CENTER")
-	outerRing:SetTexCoord(0, TRACKING_BORDER_CROP, 0, TRACKING_BORDER_CROP)
-	outerRing:SetVertexColor(0.46, 0.68, 0.92)
-	outerRing:SetAlpha(0.78)
+	local outerRing = CreateSmoothRing(wheelHub, 160, 4, 0.36, 0.72, 0.54, 0.5, 128, "BORDER")
 	self.outerRing = outerRing
 
 	local pointer = wheelHub:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
@@ -578,7 +621,7 @@ function Addon:CreateUI()
 
 	local resultTitle = resultFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 	resultTitle:SetPoint("TOPLEFT", 8, -6)
-	resultTitle:SetPoint("TOPRIGHT", portButton, "TOPLEFT", -7, -6)
+	resultTitle:SetPoint("TOPRIGHT", resultFrame, "TOPRIGHT", -8, -6)
 	resultTitle:SetJustifyH("CENTER")
 	resultTitle:SetText("BEREIT FÜR DEN DREH")
 	resultTitle:SetTextColor(0.58, 0.68, 0.82)
@@ -666,8 +709,10 @@ function Addon:CreateUI()
 	end
 
 	local footer = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	footer:SetPoint("BOTTOM", 0, 19)
-	footer:SetText("Direkt  >  LibKeystone  >  Chat  >  Manuell     |     /kwheel")
+	footer:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 22, 19)
+	footer:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -22, 19)
+	footer:SetJustifyH("CENTER")
+	footer:SetText("Direkt  >  LibKeystone  >  Chat  >  Manuell  |  /kwheel")
 
 	self.confetti = {}
 	for index = 1, 28 do
@@ -782,6 +827,20 @@ function Addon:UpdatePortButtonCooldown()
 	end
 end
 
+function Addon:UpdateResultLayout(showPortButton)
+	if not self.resultTitle or not self.resultFrame or not self.portButton then
+		return
+	end
+
+	self.resultTitle:ClearAllPoints()
+	self.resultTitle:SetPoint("TOPLEFT", self.resultFrame, "TOPLEFT", 8, -6)
+	if showPortButton then
+		self.resultTitle:SetPoint("TOPRIGHT", self.portButton, "TOPLEFT", -7, -6)
+	else
+		self.resultTitle:SetPoint("TOPRIGHT", self.resultFrame, "TOPRIGHT", -8, -6)
+	end
+end
+
 function Addon:UpdatePortButton(entry)
 	local button = self.portButton
 	if not button then
@@ -789,6 +848,7 @@ function Addon:UpdatePortButton(entry)
 	end
 
 	self.selectedWinner = entry
+	self:UpdateResultLayout(false)
 	if InCombatLockdown and InCombatLockdown() then
 		self.pendingTeleportEntry = entry
 		button:Disable()
@@ -821,6 +881,7 @@ function Addon:UpdatePortButton(entry)
 	button.icon:SetDesaturated(not known)
 	button.text:SetText("PORT")
 	button:Show()
+	self:UpdateResultLayout(true)
 
 	if known then
 		button:SetAttribute("type", "spell")
