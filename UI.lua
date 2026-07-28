@@ -742,12 +742,18 @@ function Addon:CreateUI()
 			GameTooltip:AddLine(L.NO_SYNC_PEER, 0.72, 0.72, 0.76, true)
 		else
 			for _, detail in ipairs(details) do
+				local metadata = {}
+				if detail.version then
+					metadata[#metadata + 1] = "v" .. detail.version
+				end
+				if detail.transport then
+					metadata[#metadata + 1] = detail.transport
+				end
+				local suffix = #metadata > 0 and (" (" .. table.concat(metadata, ", ") .. ")") or ""
 				GameTooltip:AddLine(
-					L.PEER_HAS_KEYS:format(
-						detail.name,
-						detail.count,
-						detail.version and (" (v" .. detail.version .. ")") or ""
-					),
+					detail.hasState
+						and L.PEER_HAS_KEYS:format(detail.name, detail.count, suffix)
+						or L.PEER_WAITING_STATE:format(detail.name, suffix),
 					detail.matches and 0.35 or 1,
 					detail.matches and 1 or 0.42,
 					detail.matches and 0.55 or 0.3

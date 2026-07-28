@@ -9,8 +9,8 @@ Warcraft Retail ausgelegt.
 - Erkennt den eigenen Mythic+-Schlüssel direkt über die WoW-API.
 - Zeigt Oberfläche, Tooltips, Chatmeldungen und Diagnose auf deutschen Clients
   auf Deutsch und auf englischen Clients auf Englisch an.
-- Tauscht Schlüssel mit anderen KeystoneWheel-Nutzern über das gemeinsame
-  `LibKS`-Protokoll aus.
+- Tauscht Schlüssel mit anderen KeystoneWheel-Nutzern direkt über `KSWheel1`
+  und zusätzlich über das gemeinsame `LibKS`-Protokoll aus.
 - Synchronisiert das Ergebnis eines Drehs automatisch mit allen
   KeystoneWheel-Nutzern in Gruppe, Raid oder Instanzgruppe.
 - Vergleicht den sichtbaren Stein-Pool aller erkannten KeystoneWheel-Nutzer
@@ -41,14 +41,16 @@ Die Datenquellen werden pro Spieler in dieser Reihenfolge verwendet:
 3. Im Gruppenchat verlinkte Keystone-Items
 4. Manuell eingefügte Keystone-Links
 
-KeystoneWheel registriert kein zusätzliches eigenes Kommunikations-Prefix.
-Ist `LibKS` bereits durch ein anderes Addon vorhanden, wird kein weiterer
-Platz aus WoWs begrenztem Prefix-Pool verbraucht.
+KeystoneWheel versucht für Schlüssel, Pool-Status und Dreh-Ergebnisse das
+eigene Kommunikations-Prefix `KSWheel1` zu registrieren. Parallel werden die
+Sync-Nachrichten über `LibKS` übertragen. Ist der begrenzte Prefix-Pool durch
+viele andere Addons bereits voll, bleibt damit der gemeinsam genutzte
+`LibKS`-Weg als Fallback erhalten. Doppelt empfangene Nachrichten werden
+anhand ihrer Kennung zusammengeführt.
 
-Auch die Dreh-Ergebnisse werden als eindeutig markierte KeystoneWheel-
-Nachricht über `LibKS` übertragen. Andere LibKeystone-Addons ignorieren diese
-Erweiterung, während KeystoneWheel-Nutzer in derselben Gruppe das gleiche
-Ergebnis sehen.
+Andere LibKeystone-Addons ignorieren die eindeutig markierte
+KeystoneWheel-Erweiterung, während KeystoneWheel-Nutzer in derselben Gruppe
+das gleiche Ergebnis sehen.
 
 ## Installation mit WowUp
 
@@ -92,6 +94,12 @@ Nach einem Dreh wird das Ergebnis an andere KeystoneWheel-Nutzer in der
 Gruppe übertragen. Ist deren Rad geöffnet, springt es auf denselben Stein und
 zeigt die Ergebnisanimation. Bei geschlossenem Rad erscheint nur eine kurze
 Chatmeldung; das Fenster wird nicht ungefragt geöffnet.
+
+Ist „Ergebnis posten“ aktiv, dient die normale deutsche oder englische
+Gruppenmeldung zusätzlich als Notfall-Fallback. Fällt der Addon-Transport aus,
+ordnet KeystoneWheel Gewinnername und Stufe einem lokalen Stein zu. Trifft die
+reguläre Synchronisierung ebenfalls ein, wird das doppelte Ergebnis
+automatisch unterdrückt.
 
 Der Sync-Wert über dem Rad zählt ausschließlich erkannte KeystoneWheel-Nutzer.
 Ein Klick auf die Statuszeile fragt deren aktuellen Pool erneut ab; der Tooltip
@@ -157,7 +165,8 @@ Der Workflow:
 1. prüft das Tagformat und die TOC-Version,
 2. erzeugt `KeystoneWheel-v1.2.3.zip`,
 3. prüft `KeystoneWheel/KeystoneWheel.toc` im Archiv und
-4. erstellt ein GitHub Release mit automatisch generierten Release Notes.
+4. übernimmt den passenden Eintrag aus dem [Changelog](CHANGELOG.md) und
+5. erstellt daraus das GitHub Release.
 
 ## Lizenz
 

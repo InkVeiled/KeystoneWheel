@@ -3,7 +3,8 @@
 ## Notes: Collects the group's Mythic+ keystones and lets a playful wheel decide.
 ## Notes-deDE: Sammelt die M+ Schlüssel der Gruppe und lässt ein Glücksrad entscheiden.
 ## Author: KeystoneWheel contributors
-## Version: 0.4.0
+## Version: 0.5.0
+## X-KeystoneWheel-Build: 0.5.0
 ## X-Website: https://github.com/InkVeiled/KeystoneWheel
 ## X-Source: https://github.com/InkVeiled/KeystoneWheel
 ## OptionalDeps: BigWigs, BossHelper, LibKeystone, MythicMentor

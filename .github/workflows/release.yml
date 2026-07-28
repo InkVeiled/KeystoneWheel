@@ -56,6 +56,8 @@ jobs:
             exit 1
           fi
 
+          echo "RELEASE_VERSION=${tag_version}" >> "${GITHUB_ENV}"
+
       - name: Build and verify WowUp archive
         shell: bash
         run: |
@@ -75,6 +77,7 @@ jobs:
               Path("Core.lua"),
               Path("UI.lua"),
               Path("Media/WheelBackdrop.tga"),
+              Path("CHANGELOG.md"),
               Path("README.md"),
               Path("RELEASE_CHECKLIST.md"),
               Path("LICENSE"),
@@ -102,6 +105,33 @@ jobs:
 
           echo "RELEASE_ARCHIVE=dist/${ADDON_NAME}-${RELEASE_TAG}.zip" >> "${GITHUB_ENV}"
 
+      - name: Prepare release notes from changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"]
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = re.compile(
+              rf"^## \[{re.escape(version)}\][^\n]*\n(?P<body>.*?)(?=^## \[|\Z)",
+              re.MULTILINE | re.DOTALL,
+          )
+          match = pattern.search(changelog)
+          if not match or not match.group("body").strip():
+              raise SystemExit(f"No changelog entry found for {version}.")
+
+          notes = Path("dist/release-notes.md")
+          notes.write_text(match.group("body").strip() + "\n", encoding="utf-8")
+          print(f"Prepared release notes for {version}.")
+          PY
+
+          echo "RELEASE_NOTES=dist/release-notes.md" >> "${GITHUB_ENV}"
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -109,5 +139,5 @@ jobs:
           gh release create "${RELEASE_TAG}"
           "${RELEASE_ARCHIVE}"
           --verify-tag
-          --generate-notes
+          --notes-file "${RELEASE_NOTES}"
           --title "${ADDON_NAME} ${RELEASE_TAG}"

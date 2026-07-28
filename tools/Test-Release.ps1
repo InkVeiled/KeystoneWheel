@@ -12,6 +12,7 @@ $sourceFiles = @(
     "Core.lua",
     "UI.lua",
     "Media/WheelBackdrop.tga",
+    "CHANGELOG.md",
     "README.md",
     "RELEASE_CHECKLIST.md",
     "LICENSE"
@@ -33,6 +34,18 @@ if ($version -notmatch '^\d+\.\d+\.\d+$') {
     throw "TOC version '$version' must use the form 1.2.3."
 }
 
+$buildLine = Select-String -LiteralPath $tocPath -Pattern '^## X-KeystoneWheel-Build:\s*(.+?)\s*$' |
+    Select-Object -First 1
+$build = if ($buildLine) {
+    $buildLine.Matches[0].Groups[1].Value
+}
+else {
+    $version
+}
+if ($build -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') {
+    throw "Build identifier '$build' contains unsupported characters."
+}
+
 $missingFiles = @(
     foreach ($relativePath in $sourceFiles) {
         $sourcePath = Join-Path $repoRoot $relativePath
@@ -47,7 +60,7 @@ if ($missingFiles.Count -gt 0) {
 }
 
 $distPath = Join-Path $repoRoot "dist"
-$archivePath = Join-Path $distPath "$addonName-local-v$version.zip"
+$archivePath = Join-Path $distPath "$addonName-local-v$build.zip"
 
 New-Item -ItemType Directory -Path $distPath -Force | Out-Null
 if (Test-Path -LiteralPath $archivePath) {
@@ -107,5 +120,5 @@ finally {
 
 Write-Host "Local release candidate verified:"
 Write-Host "  $archivePath"
-Write-Host "Version, required files, top-level folder and TOC structure are valid."
+Write-Host "Release version $version, test build $build, required files, top-level folder and TOC structure are valid."
 Write-Host "Nothing was committed, tagged, pushed or published."

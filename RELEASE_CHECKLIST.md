@@ -20,8 +20,13 @@ Release veröffentlicht.
 - Ignorieren und erneutes Aktivieren einzelner Schlüssel prüfen.
 - Drehung, Animation, Sound und Ergebnisnachricht prüfen.
 - Synchronisierte Auswahl mit mindestens einem weiteren Addon-Nutzer prüfen.
+- Chat-Fallback mit aktivierter Ergebnisnachricht und unterbrochenem
+  Addon-Transport prüfen; bei normalem Transport darf keine doppelte
+  Ergebnisanzeige entstehen.
 - Übereinstimmenden und absichtlich abweichenden Pool-Sync mit mindestens zwei
   Addon-Nutzern prüfen.
+- Im Debug-Bericht prüfen, dass `KSWheel1` und/oder `LibKS` als registrierter
+  Sync-Transport erscheinen.
 - Wiederholungsschutz bis zum automatischen Start einer neuen Runde prüfen.
 - Ergebnisverlauf und beide Möglichkeiten zum Zurücksetzen prüfen.
 - Drehberechtigung als Gruppenmitglied, Gruppenleitung und Raid-Assistenz prüfen.

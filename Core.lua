@@ -58,6 +58,25 @@ local function GroupChannel()
 	end
 end
 
+local function IsPrefixRegistered(prefix)
+	local checker = C_ChatInfo and C_ChatInfo.IsAddonMessagePrefixRegistered
+		or _G.IsAddonMessagePrefixRegistered
+	return checker and checker(prefix) == true or false
+end
+
+local function GetAddonBuild()
+	if C_AddOns and C_AddOns.GetAddOnMetadata then
+		return C_AddOns.GetAddOnMetadata(ADDON_NAME, "X-KeystoneWheel-Build")
+			or C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version")
+			or "?"
+	elseif GetAddOnMetadata then
+		return GetAddOnMetadata(ADDON_NAME, "X-KeystoneWheel-Build")
+			or GetAddOnMetadata(ADDON_NAME, "Version")
+			or "?"
+	end
+	return "?"
+end
+
 local function FullUnitName(unit)
 	local name = GetUnitName(unit, true)
 	if not name or name == "" then
@@ -71,6 +90,28 @@ local function ShortName(name)
 		return nil
 	end
 	return Ambiguate(name, "short")
+end
+
+local function NormalizePlayerName(name)
+	if type(name) ~= "string" or name == "" then
+		return nil
+	end
+	return name:lower():gsub("%s+", "")
+end
+
+local function BasePlayerName(name)
+	if type(name) ~= "string" then
+		return nil
+	end
+	return name:match("^([^-]+)")
+end
+
+local function ComparableShortName(name)
+	local shortName = ShortName(name)
+	if not shortName or NormalizePlayerName(shortName) == NormalizePlayerName(name) then
+		return BasePlayerName(name) or shortName
+	end
+	return shortName
 end
 
 local function DebugValue(value)
@@ -107,6 +148,14 @@ function Addon:DebugLog(formatString, ...)
 	self:Print("|cff61d7ffDEBUG|r " .. (ok and message or formatString))
 end
 
+function Addon:SendAddonPayload(prefix, message, channel)
+	if not channel or not IsPrefixRegistered(prefix) then
+		return false
+	end
+	local ok, sent = pcall(C_ChatInfo.SendAddonMessage, prefix, message, channel)
+	return ok and sent ~= false
+end
+
 function Addon:GetSourceLabel(source)
 	return SOURCE_LABELS[source] or source or L.UNKNOWN
 end
@@ -123,13 +172,13 @@ function Addon:IsOwnSender(sender)
 	if not playerName then
 		return false
 	end
-	if sender:lower() == playerName:lower() then
+	if NormalizePlayerName(sender) == NormalizePlayerName(playerName) then
 		return true
 	end
-	local senderShortName = ShortName(sender)
-	local playerShortName = ShortName(playerName)
+	local senderShortName = ComparableShortName(sender)
+	local playerShortName = ComparableShortName(playerName)
 	return senderShortName and playerShortName
-		and senderShortName:lower() == playerShortName:lower()
+		and NormalizePlayerName(senderShortName) == NormalizePlayerName(playerShortName)
 end
 
 function Addon:CanPlayerSpin()
@@ -187,15 +236,24 @@ function Addon:RefreshRoster()
 	wipe(self.rosterOrder)
 
 	local units = { "player" }
-	for index = 1, 4 do
-		units[#units + 1] = "party" .. index
+	if IsInRaid() then
+		for index = 1, GetNumGroupMembers() do
+			units[#units + 1] = "raid" .. index
+		end
+	else
+		for index = 1, 4 do
+			units[#units + 1] = "party" .. index
+		end
 	end
 
+	local addedNames = {}
 	for _, unit in ipairs(units) do
 		if UnitExists(unit) then
 			local fullName = FullUnitName(unit)
 			local displayName = UnitName(unit) or ShortName(fullName) or fullName
-			if fullName then
+			local normalizedName = NormalizePlayerName(fullName)
+			if fullName and not addedNames[normalizedName] then
+				addedNames[normalizedName] = true
 				local info = {
 					id = fullName,
 					displayName = displayName,
@@ -204,10 +262,12 @@ function Addon:RefreshRoster()
 				}
 				self.rosterOrder[#self.rosterOrder + 1] = fullName
 				self.roster[fullName:lower()] = info
-				self.roster[displayName:lower()] = info
+				self.roster[normalizedName] = info
+				self.roster[NormalizePlayerName(displayName)] = info
 				local ambiguousName = Ambiguate(fullName, "none")
 				if ambiguousName then
 					self.roster[ambiguousName:lower()] = info
+					self.roster[NormalizePlayerName(ambiguousName)] = info
 				end
 			end
 		end
@@ -259,10 +319,13 @@ function Addon:ResolvePlayer(name)
 		return nil
 	end
 
-	local info = self.roster[name:lower()]
+	local info = self.roster[name:lower()] or self.roster[NormalizePlayerName(name)]
 	if not info then
-		local short = ShortName(name)
-		info = short and self.roster[short:lower()]
+		local short = ComparableShortName(name)
+		info = short and (
+			self.roster[short:lower()]
+			or self.roster[NormalizePlayerName(short)]
+		)
 	end
 	if info then
 		return info.id, info.displayName, info.classFile, true
@@ -483,12 +546,53 @@ end
 function Addon:PrunePeerStates()
 	local now = GetTime()
 	for sender, state in pairs(self.peerStates) do
-		if not self:IsCurrentGroupMember(sender)
-			or not state.seen
-			or now - state.seen > PEER_STATE_MAX_AGE then
+		local reason
+		if not self:IsCurrentGroupMember(sender) then
+			reason = "not-in-roster"
+		elseif not state.seen then
+			reason = "missing-timestamp"
+		elseif now - state.seen > PEER_STATE_MAX_AGE then
+			reason = "expired"
+		end
+		if reason then
+			self:DebugLog(L.DEBUG_SYNC_PRUNED, state.name or sender, reason)
 			self.peerStates[sender] = nil
 		end
 	end
+end
+
+function Addon:TouchPeerState(sender, transport)
+	local peerKey = NormalizePlayerName(sender) or sender:lower()
+	local state = self.peerStates[peerKey]
+	local isNew = state == nil
+	if not state then
+		state = {
+			name = sender,
+			transports = {},
+		}
+		self.peerStates[peerKey] = state
+	end
+	state.name = sender
+	state.seen = GetTime()
+	state.transports = state.transports or {}
+	state.transports[transport or L.UNKNOWN] = true
+	return state, isNew
+end
+
+function Addon:StorePeerPoolState(sender, transport, hash, count, build)
+	local state = self:TouchPeerState(sender, transport)
+	state.hash = hash
+	state.count = math.floor(count)
+	state.version = build
+	self:DebugLog(
+		L.DEBUG_SYNC_ACCEPTED,
+		sender,
+		transport or L.UNKNOWN,
+		build,
+		hash,
+		state.count
+	)
+	self:RefreshUI()
 end
 
 function Addon:GetSyncStatus()
@@ -509,11 +613,18 @@ function Addon:GetSyncDetails()
 	local ownHash, ownCount = self:GetWheelPoolState()
 	local details = {}
 	for sender, state in pairs(self.peerStates) do
+		local transports = {}
+		for prefix in pairs(state.transports or {}) do
+			transports[#transports + 1] = prefix
+		end
+		table.sort(transports)
 		details[#details + 1] = {
 			name = ShortName(state.name or sender) or state.name or sender,
 			matches = state.hash == ownHash and state.count == ownCount,
 			count = state.count,
 			version = state.version,
+			transport = #transports > 0 and table.concat(transports, " + ") or nil,
+			hasState = state.hash ~= nil and state.count ~= nil,
 		}
 	end
 	table.sort(details, function(left, right)
@@ -533,8 +644,10 @@ function Addon:SendWheelCommand(kind, ...)
 		local value = tostring(select(index, ...) or ""):gsub(";", "")
 		fields[#fields + 1] = value
 	end
-	C_ChatInfo.SendAddonMessage(self.LIB_PREFIX, table.concat(fields, ";"), channel)
-	return true
+	local payload = table.concat(fields, ";")
+	local directSent = self:SendAddonPayload(self.CUSTOM_PREFIX, payload, channel)
+	local fallbackSent = self:SendAddonPayload(self.LIB_PREFIX, payload, channel)
+	return directSent or fallbackSent
 end
 
 function Addon:BroadcastWheelState(force)
@@ -550,13 +663,8 @@ function Addon:BroadcastWheelState(force)
 		return
 	end
 
-	local version = "?"
-	if C_AddOns and C_AddOns.GetAddOnMetadata then
-		version = C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version") or "?"
-	elseif GetAddOnMetadata then
-		version = GetAddOnMetadata(ADDON_NAME, "Version") or "?"
-	end
-	if self:SendWheelCommand("STATE", hash, count, version) then
+	local build = GetAddonBuild()
+	if self:SendWheelCommand("STATE", hash, count, build) then
 		self.lastBroadcastState = stateKey
 		self.lastStateBroadcastAt = now
 	end
@@ -585,7 +693,8 @@ function Addon:RequestWheelStates()
 	if not IsInGroup() then
 		return
 	end
-	self:SendWheelCommand("SYNCREQ", self:NewMessageID())
+	local hash, count = self:GetWheelPoolState()
+	self:SendWheelCommand("SYNCREQ", self:NewMessageID(), hash, count, GetAddonBuild())
 	self:ScheduleWheelStateBroadcast(true)
 end
 
@@ -617,13 +726,33 @@ function Addon:UpdateOwnKey(shouldBroadcast)
 	end
 end
 
-function Addon:BroadcastOwnKey(channel)
+function Addon:BroadcastDirectKey(channel)
+	channel = channel or GroupChannel()
+	if not IsInGroup() or not channel then
+		return false
+	end
+	local level, mapID, rating = self:GetOwnKeyInfo()
+	local message = ("KEY;%d;%d;%d"):format(level, mapID, rating)
+	return self:SendAddonPayload(self.CUSTOM_PREFIX, message, channel)
+end
+
+function Addon:BroadcastLibKey()
 	if not IsInGroup() or IsInRaid() then
-		return
+		return false
 	end
 	local level, mapID, rating = self:GetOwnKeyInfo()
 	local message = ("%d,%d,%d"):format(level, mapID, rating)
-	C_ChatInfo.SendAddonMessage(self.LIB_PREFIX, message, "PARTY")
+	return self:SendAddonPayload(self.LIB_PREFIX, message, "PARTY")
+end
+
+function Addon:BroadcastOwnKey(channel)
+	channel = channel or GroupChannel()
+	if not IsInGroup() or not channel then
+		return false
+	end
+	local directSent = self:BroadcastDirectKey(channel)
+	local fallbackSent = channel == "PARTY" and self:BroadcastLibKey() or false
+	return directSent or fallbackSent
 end
 
 function Addon:TryAttachLibKeystone()
@@ -646,11 +775,21 @@ function Addon:TryAttachLibKeystone()
 end
 
 function Addon:RequestLibKeystone()
+	if not IsInGroup() or IsInRaid() then
+		return
+	end
 	self:TryAttachLibKeystone()
 	if self.libKeystone and self.libKeystone.Request then
 		self.libKeystone.Request("PARTY")
-	elseif IsInGroup() then
-		C_ChatInfo.SendAddonMessage(self.LIB_PREFIX, "R", "PARTY")
+	else
+		self:SendAddonPayload(self.LIB_PREFIX, "R", "PARTY")
+	end
+end
+
+function Addon:RequestDirectKeys(channel)
+	channel = channel or GroupChannel()
+	if IsInGroup() and channel then
+		self:SendAddonPayload(self.CUSTOM_PREFIX, "REQUEST", channel)
 	end
 end
 
@@ -664,9 +803,10 @@ function Addon:RequestAll(force)
 	self:UpdateOwnKey(false)
 	local channel = GroupChannel()
 	self:DebugLog(L.DEBUG_REQUEST_CHANNEL, channel or L.NONE)
-	if IsInGroup() and not IsInRaid() then
-		self:BroadcastOwnKey("PARTY")
+	if IsInGroup() then
+		self:BroadcastOwnKey(channel)
 	end
+	self:RequestDirectKeys(channel)
 	self:RequestLibKeystone()
 	self:RequestWheelStates()
 	self:RefreshUI()
@@ -826,7 +966,7 @@ function Addon:AcceptRerollVote(sender, voteID)
 	if not vote or vote.id ~= voteID or vote.expires <= GetTime() then
 		return
 	end
-	vote.votes[sender:lower()] = true
+	vote.votes[NormalizePlayerName(sender) or sender:lower()] = true
 	local count, required = self:GetPendingVoteCount()
 	self:RefreshUI()
 	if count < required then
@@ -853,24 +993,117 @@ function Addon:AnnounceWinner(entry)
 	end
 end
 
+function Addon:GetSyncedResultKey(sender, winner)
+	local winnerName = winner and (winner.id or winner.displayName)
+	local winnerShortName = ComparableShortName(winnerName) or winnerName or L.UNKNOWN
+	return table.concat({
+		NormalizePlayerName(sender) or tostring(sender):lower(),
+		NormalizePlayerName(winnerShortName) or tostring(winnerShortName):lower(),
+		tostring(SafeNumber(winner and winner.level)),
+		tostring(SafeNumber(winner and winner.mapID)),
+	}, "|")
+end
+
+function Addon:ShouldPresentSyncedResult(sender, winner, source)
+	local now = GetTime()
+	self.recentSyncedResults = self.recentSyncedResults or {}
+	for key, result in pairs(self.recentSyncedResults) do
+		if not result.seen or now - result.seen > 8 then
+			self.recentSyncedResults[key] = nil
+		end
+	end
+
+	local resultKey = self:GetSyncedResultKey(sender, winner)
+	local previous = self.recentSyncedResults[resultKey]
+	if previous and now - previous.seen <= 8
+		and (source == "chat" or previous.source ~= source) then
+		self:DebugLog(L.DEBUG_RESULT_DUPLICATE, source, sender)
+		return false
+	end
+	self.recentSyncedResults[resultKey] = {
+		seen = now,
+		source = source,
+	}
+	return true
+end
+
+function Addon:ParseChatRoll(message)
+	if type(message) ~= "string" then
+		return
+	end
+	local body = message:match("^KeystoneWheel:%s*(.-)%s*$")
+	if not body then
+		return
+	end
+
+	local winnerName, level = body:match("^Das Rad wählt (.-): %+(%d+) .+!$")
+	if not winnerName then
+		winnerName, level = body:match("^The wheel chooses (.-): %+(%d+) .+!$")
+	end
+	level = tonumber(level)
+	if not winnerName or not level then
+		return
+	end
+	return winnerName, math.floor(level)
+end
+
+function Addon:HandleChatRollFallback(message, sender)
+	local winnerName, level = self:ParseChatRoll(message)
+	if not winnerName then
+		return false
+	end
+	if self:IsOwnSender(sender) or not self:IsCurrentGroupMember(sender) then
+		return false
+	end
+
+	local winnerID, _, _, inRoster = self:ResolvePlayer(winnerName)
+	if not winnerID or not inRoster then
+		self:DebugLog(L.DEBUG_CHAT_ROLL_UNMATCHED, sender, winnerName, level)
+		return false
+	end
+
+	local winner
+	for _, entry in ipairs(self:GetActiveKeys()) do
+		if entry.id == winnerID and entry.level == level then
+			winner = entry
+			break
+		end
+	end
+	if not winner then
+		self:DebugLog(L.DEBUG_CHAT_ROLL_UNMATCHED, sender, winnerName, level)
+		return false
+	end
+	if not self:ShouldPresentSyncedResult(sender, winner, "chat") then
+		return true
+	end
+
+	local rollID = "chat-" .. HashText((NormalizePlayerName(sender) or sender) .. "|" .. message)
+	self:DebugLog(L.DEBUG_CHAT_ROLL_USED, sender, winner.displayName, winner.level, winner.mapID)
+	self:ShowSyncedWinner(winner, sender, rollID, 0)
+	return true
+end
+
 function Addon:IsCurrentGroupMember(playerName)
 	if type(playerName) ~= "string" or playerName == "" then
 		return false
 	end
 
+	local normalizedName = NormalizePlayerName(playerName)
 	local rosterEntry = self.roster[playerName:lower()]
+		or normalizedName and self.roster[normalizedName]
 	if rosterEntry then
 		return true
 	end
-	if IsInRaid() and UnitInRaid then
-		return UnitInRaid(playerName) ~= nil
+	if IsInRaid() and UnitInRaid and UnitInRaid(playerName) ~= nil then
+		return true
 	end
-	if UnitInParty then
-		return UnitInParty(playerName) == true
+	if UnitInParty and UnitInParty(playerName) == true then
+		return true
 	end
 
-	local shortName = ShortName(playerName)
-	return shortName and self.roster[shortName:lower()] ~= nil
+	local shortName = ComparableShortName(playerName)
+	local normalizedShortName = NormalizePlayerName(shortName)
+	return normalizedShortName and self.roster[normalizedShortName] ~= nil
 end
 
 function Addon:BroadcastWinner(entry, rollID, lockSeconds)
@@ -893,7 +1126,7 @@ function Addon:BroadcastWinner(entry, rollID, lockSeconds)
 	self:DebugLog(L.DEBUG_ROLL_SENT, rollID, channel, winnerID, level, mapID)
 end
 
-function Addon:HandleWheelMessage(message, channel, sender)
+function Addon:HandleWheelMessage(message, channel, sender, transport)
 	if type(message) ~= "string" or type(sender) ~= "string" then
 		return
 	end
@@ -913,6 +1146,11 @@ function Addon:HandleWheelMessage(message, channel, sender)
 		self:DebugLog(L.DEBUG_NON_GROUP_MESSAGE, kind, sender)
 		return
 	end
+	local _, isNewPeer = self:TouchPeerState(sender, transport)
+	self:DebugLog(L.DEBUG_WHEEL_MESSAGE, kind, transport or L.UNKNOWN, sender)
+	if isNewPeer then
+		self:RefreshUI()
+	end
 
 	if kind == "STATE" then
 		local hash = fields[4]
@@ -920,18 +1158,11 @@ function Addon:HandleWheelMessage(message, channel, sender)
 		local addonVersion = fields[6]
 		if type(hash) ~= "string" or not hash:match("^[%da-f]+$") or #hash > 16
 			or not count or count < 0 or count > 20
-			or type(addonVersion) ~= "string" or #addonVersion > 20 then
+			or type(addonVersion) ~= "string" or #addonVersion > 40 then
 			self:DebugLog(L.DEBUG_INVALID_SYNC, sender)
 			return
 		end
-		self.peerStates[sender:lower()] = {
-			name = sender,
-			hash = hash,
-			count = math.floor(count),
-			version = addonVersion,
-			seen = GetTime(),
-		}
-		self:RefreshUI()
+		self:StorePeerPoolState(sender, transport, hash, count, addonVersion)
 		return
 	end
 
@@ -940,6 +1171,30 @@ function Addon:HandleWheelMessage(message, channel, sender)
 		if type(requestID) ~= "string" or not requestID:match("^[%w%-]+$") or #requestID > 32 then
 			return
 		end
+		local hash = fields[5]
+		local count = tonumber(fields[6])
+		local addonVersion = fields[7]
+		if hash or count or addonVersion then
+			if type(hash) ~= "string" or not hash:match("^[%da-f]+$") or #hash > 16
+				or not count or count < 0 or count > 20
+				or type(addonVersion) ~= "string" or #addonVersion > 40 then
+				self:DebugLog(L.DEBUG_INVALID_SYNC, sender)
+				return
+			end
+			self:StorePeerPoolState(sender, transport, hash, count, addonVersion)
+		end
+		local now = GetTime()
+		self.seenSyncRequests = self.seenSyncRequests or {}
+		for key, seenAt in pairs(self.seenSyncRequests) do
+			if now - seenAt > 15 then
+				self.seenSyncRequests[key] = nil
+			end
+		end
+		local requestKey = (NormalizePlayerName(sender) or sender:lower()) .. ":" .. requestID
+		if self.seenSyncRequests[requestKey] then
+			return
+		end
+		self.seenSyncRequests[requestKey] = now
 		C_Timer.After(math.random() * 0.35, function()
 			Addon:BroadcastWheelState(true)
 		end)
@@ -967,7 +1222,7 @@ function Addon:HandleWheelMessage(message, channel, sender)
 				self.seenRolls[key] = nil
 			end
 		end
-		local rollKey = sender:lower() .. ":" .. rollID
+		local rollKey = (NormalizePlayerName(sender) or sender:lower()) .. ":" .. rollID
 		if self.seenRolls[rollKey] then
 			return
 		end
@@ -983,6 +1238,11 @@ function Addon:HandleWheelMessage(message, channel, sender)
 			texture = texture,
 			source = "addon",
 		}
+		if not self:ShouldPresentSyncedResult(sender, winner, "addon") then
+			self:StartFateLock(rollID, lockSeconds)
+			self:RefreshUI()
+			return
+		end
 		self:DebugLog(L.DEBUG_ROLL_RECEIVED, rollID, sender)
 		self:ShowSyncedWinner(winner, sender, rollID, lockSeconds)
 		return
@@ -1027,27 +1287,30 @@ function Addon:OnAddonMessage(prefix, message, channel, sender)
 		self:DebugLog(L.DEBUG_PROTECTED_MESSAGE)
 		return
 	end
-	self:DebugLog(L.DEBUG_MESSAGE_RECEIVED, DebugValue(prefix), DebugValue(channel), DebugValue(sender))
+	if prefix == self.CUSTOM_PREFIX or prefix == self.LIB_PREFIX then
+		self:DebugLog(L.DEBUG_MESSAGE_RECEIVED, DebugValue(prefix), DebugValue(channel), DebugValue(sender))
+	end
+	if (prefix == self.CUSTOM_PREFIX or prefix == self.LIB_PREFIX)
+		and type(message) == "string" and message:sub(1, 3) == "KW;" then
+		self:HandleWheelMessage(message, channel, sender, prefix)
+		return
+	end
 	if prefix == self.CUSTOM_PREFIX then
 		if message == "REQUEST" then
 			C_Timer.After(math.random() * 0.35, function()
-				Addon:BroadcastOwnKey(channel)
+				Addon:BroadcastDirectKey(channel)
 			end)
 			return
 		end
 		local kind, level, mapID, rating = strsplit(";", message)
-		if kind == "KEY" then
+		if kind == "KEY" and self:IsCurrentGroupMember(sender) then
 			self:UpdateEntry(sender, level, mapID, "addon", rating)
 		end
 	elseif prefix == self.LIB_PREFIX then
-		if type(message) == "string" and message:sub(1, 3) == "KW;" then
-			self:HandleWheelMessage(message, channel, sender)
-			return
-		end
 		if message == "R" then
 			if not self.libKeystone and channel == "PARTY" then
 				C_Timer.After(math.random() * 0.35, function()
-					Addon:BroadcastOwnKey("PARTY")
+					Addon:BroadcastLibKey()
 				end)
 			end
 			return
@@ -1066,7 +1329,9 @@ function Addon:OnGroupChat(message, sender)
 	local level, mapID = self:ParseKeystoneLink(message)
 	if level then
 		self:UpdateEntry(sender, level, mapID, "chat", 0)
+		return
 	end
+	self:HandleChatRollFallback(message, sender)
 end
 
 function Addon:ScheduleOwnUpdate(delay, broadcast)
@@ -1080,16 +1345,10 @@ function Addon:ScheduleOwnUpdate(delay, broadcast)
 end
 
 function Addon:PrintDebugReport(label)
-	local version = "?"
-	if C_AddOns and C_AddOns.GetAddOnMetadata then
-		version = C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version") or "?"
-	elseif GetAddOnMetadata then
-		version = GetAddOnMetadata(ADDON_NAME, "Version") or "?"
-	end
+	local build = GetAddonBuild()
 
-	local prefixCheck = C_ChatInfo and C_ChatInfo.IsAddonMessagePrefixRegistered
-		or _G.IsAddonMessagePrefixRegistered
-	local libRegistered = prefixCheck and prefixCheck(self.LIB_PREFIX)
+	local customRegistered = IsPrefixRegistered(self.CUSTOM_PREFIX)
+	local libRegistered = IsPrefixRegistered(self.LIB_PREFIX)
 	local channel = GroupChannel()
 	local level, mapID, rating = self:GetOwnKeyInfo()
 	local ownDungeon = mapID > 0 and self:GetDungeonInfo(mapID) or L.DEBUG_NO_KEY
@@ -1105,16 +1364,22 @@ function Addon:PrintDebugReport(label)
 
 	self:Print(L.DEBUG_REPORT_TITLE:format(label or L.DEBUG_STATUS))
 	self:Print(L.DEBUG_VERSION_LINE:format(
-		version,
+		build,
 		YesNo(InCombatLockdown()),
 		YesNo(IsInGroup()),
 		channel or L.NONE
 	))
 	self:Print(L.DEBUG_PREFIX_LINE:format(
+		L.DEBUG_DIRECT_PREFIX,
+		self.CUSTOM_PREFIX,
+		YesNo(customRegistered),
+		DebugValue(self.customPrefixResult)
+	))
+	self:Print(L.DEBUG_PREFIX_LINE:format(
+		L.DEBUG_FALLBACK_PREFIX,
 		self.LIB_PREFIX,
-		prefixCheck and YesNo(libRegistered) or L.API_MISSING,
-		DebugValue(self.libPrefixResult),
-		self.CUSTOM_PREFIX
+		YesNo(libRegistered),
+		DebugValue(self.libPrefixResult)
 	))
 	self:Print(L.DEBUG_LIB_LINE:format(
 		YesNo(self.libKeystone ~= nil),
@@ -1137,6 +1402,21 @@ function Addon:PrintDebugReport(label)
 		YesNo(self.db.fateLock),
 		YesNo(self.db.leaderOnly)
 	))
+	for sender, state in pairs(self.peerStates) do
+		local transports = {}
+		for prefix in pairs(state.transports or {}) do
+			transports[#transports + 1] = prefix
+		end
+		table.sort(transports)
+		self:Print(L.DEBUG_SYNC_PEER_LINE:format(
+			state.name or sender,
+			state.version or L.UNKNOWN,
+			state.hash or L.UNKNOWN,
+			state.count or 0,
+			state.seen and math.max(0, GetTime() - state.seen) or 0,
+			#transports > 0 and table.concat(transports, " + ") or L.UNKNOWN
+		))
+	end
 
 	for index, id in ipairs(self.rosterOrder) do
 		local entry = self.entries[id]
@@ -1160,8 +1440,13 @@ function Addon:PrintDebugReport(label)
 			#details > 0 and table.concat(details, ", ") or L.DEBUG_NO_SOURCES
 		))
 	end
-	if type(self.libPrefixResult) == "number" and self.libPrefixResult > 1 then
-		self:Print(L.DEBUG_PREFIX_WARNING:format(self.libPrefixResult))
+	if not customRegistered and not libRegistered then
+		self:Print(L.DEBUG_PREFIX_WARNING:format(
+			DebugValue(self.customPrefixResult),
+			DebugValue(self.libPrefixResult)
+		))
+	elseif not customRegistered then
+		self:Print(L.DEBUG_PREFIX_FALLBACK:format(DebugValue(self.customPrefixResult)))
 	end
 	if IsInGroup() and #self.rosterOrder < 2 then
 		self:Print(L.DEBUG_ROSTER_WARNING)
@@ -1290,7 +1575,7 @@ function Addon:Initialize()
 	end
 
 	self.libPrefixResult = C_ChatInfo.RegisterAddonMessagePrefix(self.LIB_PREFIX)
-	self.customPrefixResult = L.DISABLED
+	self.customPrefixResult = C_ChatInfo.RegisterAddonMessagePrefix(self.CUSTOM_PREFIX)
 
 	local events = {
 		"PLAYER_LOGIN",
@@ -1299,6 +1584,8 @@ function Addon:Initialize()
 		"CHAT_MSG_ADDON",
 		"CHAT_MSG_PARTY",
 		"CHAT_MSG_PARTY_LEADER",
+		"CHAT_MSG_RAID",
+		"CHAT_MSG_RAID_LEADER",
 		"CHAT_MSG_INSTANCE_CHAT",
 		"CHAT_MSG_INSTANCE_CHAT_LEADER",
 		"BAG_UPDATE_DELAYED",
@@ -1345,6 +1632,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "CHAT_MSG_ADDON" then
 		Addon:OnAddonMessage(...)
 	elseif event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_PARTY_LEADER"
+		or event == "CHAT_MSG_RAID" or event == "CHAT_MSG_RAID_LEADER"
 		or event == "CHAT_MSG_INSTANCE_CHAT" or event == "CHAT_MSG_INSTANCE_CHAT_LEADER" then
 		Addon:OnGroupChat(...)
 	elseif event == "GROUP_ROSTER_UPDATE" then
