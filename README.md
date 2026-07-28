@@ -7,21 +7,32 @@ Warcraft Retail ausgelegt.
 ## Funktionen
 
 - Erkennt den eigenen Mythic+-Schlüssel direkt über die WoW-API.
+- Zeigt Oberfläche, Tooltips, Chatmeldungen und Diagnose auf deutschen Clients
+  auf Deutsch und auf englischen Clients auf Englisch an.
 - Tauscht Schlüssel mit anderen KeystoneWheel-Nutzern über das gemeinsame
   `LibKS`-Protokoll aus.
 - Synchronisiert das Ergebnis eines Drehs automatisch mit allen
   KeystoneWheel-Nutzern in Gruppe, Raid oder Instanzgruppe.
+- Vergleicht den sichtbaren Stein-Pool aller erkannten KeystoneWheel-Nutzer
+  und zeigt den Synchronstatus direkt über dem Rad.
 - Verwendet vorhandene LibKeystone-Daten, wie sie unter anderem BigWigs und
   BossHelper bereitstellen.
 - Erkennt als Fallback Keystone-Links im Gruppenchat.
 - Unterstützt manuell eingefügte Keystone-Links.
 - Lässt einzelne Steine per Linksklick ignorieren und wieder zulassen.
+- Bietet optional einen rundenweisen Wiederholungsschutz und zeigt die letzten
+  drei Ziehungen kompakt unter dem Rad.
 - Zeigt ein animiertes Glücksrad mit kompakten quadratischen Steinkacheln,
   gut lesbaren Stufen-Badges, hochauflösender Radgrafik, Sound, Konfetti
   und optionaler Ergebnisnachricht im Gruppenkanal.
+- Kann Drehungen auf Gruppenleitung und Assistenzen beschränken oder ein
+  Ergebnis 30 Sekunden besiegeln. Ein vorzeitiger Neudreh benötigt dann eine
+  Mehrheit der erkannten KeystoneWheel-Nutzer.
+- Unterstützt reduzierte Animation und eine UI-Skalierung von 75 bis 115 Prozent.
 - Bietet beim ausgewählten Dungeon einen Port-Button mit Zaubericon und
   Cooldown. Noch nicht freigeschaltete Portale werden deaktiviert angezeigt.
-- Bietet einen verschiebbaren Minimap-Button und Diagnosebefehle.
+- Bietet einen verschiebbaren Minimap-Button, einen Eintrag im
+  Blizzard-Addonfach und Diagnosebefehle.
 
 Die Datenquellen werden pro Spieler in dieser Reihenfolge verwendet:
 
@@ -68,6 +79,9 @@ Der Minimap-Button öffnet das Rad mit Linksklick und sammelt die
 Gruppenschlüssel mit Rechtsklick neu ein. Die Zahl am Button zeigt die aktuell
 gefundenen Steine.
 
+Dieselben Aktionen stehen im Blizzard-Addonfach am Minimap-Rand zur Verfügung.
+Der eigene Minimap-Button kann deshalb in den Optionen ausgeblendet werden.
+
 Ein Linksklick auf eine Steinkarte markiert genau diesen Stein als ignoriert.
 Er bleibt sichtbar, wird aber nicht mehr gezogen. Ein weiterer Linksklick
 lässt ihn wieder zu. Ändern sich Dungeon oder Stufe des Spielers, gilt der
@@ -78,6 +92,21 @@ Nach einem Dreh wird das Ergebnis an andere KeystoneWheel-Nutzer in der
 Gruppe übertragen. Ist deren Rad geöffnet, springt es auf denselben Stein und
 zeigt die Ergebnisanimation. Bei geschlossenem Rad erscheint nur eine kurze
 Chatmeldung; das Fenster wird nicht ungefragt geöffnet.
+
+Der Sync-Wert über dem Rad zählt ausschließlich erkannte KeystoneWheel-Nutzer.
+Ein Klick auf die Statuszeile fragt deren aktuellen Pool erneut ab; der Tooltip
+zeigt, bei wem Zahl oder Inhalt der Steine abweichen.
+
+Der optionale Wiederholungsschutz pausiert einen gezogenen Stein bis zum Ende
+der aktuellen Runde. Sobald alle zulässigen Steine einmal gezogen wurden,
+beginnt automatisch eine neue Runde. Der Verlauf kann über das kleine
+Schließen-Symbol oder in den Optionen zurückgesetzt werden.
+
+Im Schicksalsmodus bleibt ein Ergebnis 30 Sekunden gesperrt. Ein Klick auf das
+besiegelte Rad startet vor Ablauf eine Abstimmung. Die eigene Stimme zählt
+bereits; weitere erkannte KeystoneWheel-Nutzer erhalten einen
+Zustimmen/Ablehnen-Dialog. Bei einer Mehrheit dreht das Rad des Anfragenden
+erneut.
 
 Der Port-Button erscheint beim Ergebnis, sobald für den Dungeon ein
 Teleport-Zauber hinterlegt ist. Ein freigeschalteter Port kann direkt
@@ -93,10 +122,23 @@ ausgeblendet und danach automatisch wiederhergestellt.
 - `/kwheel add Spieler [Keystone-Link]`: Link manuell hinzufügen
 - `/kwheel clear`: Chat- und manuelle Fallbacks entfernen
 - `/kwheel minimap`: Minimap-Button einblenden und zurücksetzen
+- `/kwheel minimap off`: Minimap-Button ausblenden
+- `/kwheel optionen`: Spielregeln und Darstellung öffnen
+- `/kwheel verlauf leeren`: Verlauf und Wiederholungsrunde zurücksetzen
 - `/kwheel debug`: Diagnosebericht und erneute Abfrage starten
 - `/kwheel debug on` oder `off`: Live-Protokoll ein- oder ausschalten
 
 ## Releases
+
+Kurzfristige Änderungen werden zuerst lokal gesammelt und gemeinsam im Spiel
+getestet. Version, Commit, Tag und Push erfolgen erst, wenn der gesamte
+Release Candidate freigegeben ist. Der verbindliche Ablauf steht in der
+[Release-Checkliste](RELEASE_CHECKLIST.md). Die lokale Paketprüfung kann
+ohne Commit oder Upload ausgeführt werden:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\Test-Release.ps1
+```
 
 Ein Tag im Format `v1.2.3` startet den Workflow
 `.github/workflows/release.yml`. Vor dem Taggen muss die Zeile

@@ -71,10 +71,12 @@ jobs:
           tag = os.environ["RELEASE_TAG"]
           source_files = [
               Path(f"{addon}.toc"),
+              Path("Locale.lua"),
               Path("Core.lua"),
               Path("UI.lua"),
               Path("Media/WheelBackdrop.tga"),
               Path("README.md"),
+              Path("RELEASE_CHECKLIST.md"),
               Path("LICENSE"),
           ]
 

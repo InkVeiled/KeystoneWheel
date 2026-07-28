@@ -1,4 +1,5 @@
 local ADDON_NAME, Addon = ...
+local L = Addon.L
 
 Addon.ADDON_NAME = ADDON_NAME
 Addon.CUSTOM_PREFIX = "KSWheel1"
@@ -7,8 +8,15 @@ Addon.entries = {}
 Addon.roster = {}
 Addon.rosterOrder = {}
 Addon.mapCache = {}
+Addon.peerStates = {}
+Addon.drawnCycle = {}
 
 local WHEEL_PROTOCOL_VERSION = "1"
+local FATE_LOCK_SECONDS = 30
+local REROLL_VOTE_SECONDS = 12
+local PEER_STATE_MAX_AGE = 75
+local MAX_WHEEL_KEYS = 5
+Addon.FATE_LOCK_SECONDS = FATE_LOCK_SECONDS
 local DUNGEON_TELEPORTS = {
 	[161] = 159898,  -- Skyreach
 	[239] = 1254551, -- Seat of the Triumvirate
@@ -22,11 +30,11 @@ local DUNGEON_TELEPORTS = {
 
 local SOURCE_ORDER = { "self", "addon", "lib", "chat", "manual" }
 local SOURCE_LABELS = {
-	self = "Eigener Stein",
-	addon = "KeystoneWheel",
-	lib = "LibKS / LibKeystone",
-	chat = "Gruppenchat",
-	manual = "Manuell",
+	self = L.SOURCE_SELF,
+	addon = L.SOURCE_ADDON,
+	lib = L.SOURCE_LIB,
+	chat = L.SOURCE_CHAT,
+	manual = L.SOURCE_MANUAL,
 }
 
 local eventFrame = CreateFrame("Frame")
@@ -67,7 +75,7 @@ end
 
 local function DebugValue(value)
 	if issecretvalue and issecretvalue(value) then
-		return "<geschützt>"
+		return L.PROTECTED
 	end
 	if value == nil then
 		return "nil"
@@ -76,7 +84,15 @@ local function DebugValue(value)
 end
 
 local function YesNo(value)
-	return value and "ja" or "nein"
+	return value and L.YES or L.NO
+end
+
+local function HashText(value)
+	local hash = 5381
+	for index = 1, #value do
+		hash = ((hash * 33) + value:byte(index)) % 2147483647
+	end
+	return ("%08x"):format(hash)
 end
 
 function Addon:Print(message)
@@ -92,7 +108,41 @@ function Addon:DebugLog(formatString, ...)
 end
 
 function Addon:GetSourceLabel(source)
-	return SOURCE_LABELS[source] or source or "Unbekannt"
+	return SOURCE_LABELS[source] or source or L.UNKNOWN
+end
+
+function Addon:NewMessageID()
+	return ("%d-%04d"):format(GetServerTime(), math.random(0, 9999))
+end
+
+function Addon:IsOwnSender(sender)
+	if type(sender) ~= "string" or sender == "" then
+		return false
+	end
+	local playerName = FullUnitName("player")
+	if not playerName then
+		return false
+	end
+	if sender:lower() == playerName:lower() then
+		return true
+	end
+	local senderShortName = ShortName(sender)
+	local playerShortName = ShortName(playerName)
+	return senderShortName and playerShortName
+		and senderShortName:lower() == playerShortName:lower()
+end
+
+function Addon:CanPlayerSpin()
+	if not self.db or not self.db.leaderOnly or not IsInGroup() then
+		return true
+	end
+	if UnitIsGroupLeader and UnitIsGroupLeader("player") then
+		return true
+	end
+	if IsInRaid() and UnitIsGroupAssistant and UnitIsGroupAssistant("player") then
+		return true
+	end
+	return false, IsInRaid() and L.LEADER_ONLY_RAID or L.LEADER_ONLY_PARTY
 end
 
 function Addon:GetDungeonInfo(mapID)
@@ -110,7 +160,7 @@ function Addon:GetDungeonInfo(mapID)
 		self.mapCache[mapID] = { name = name, texture = texture or 134400 }
 		return name, texture or 134400
 	end
-	return ("Dungeon %d"):format(mapID), 134400
+	return L.DUNGEON_FALLBACK:format(mapID), 134400
 end
 
 function Addon:GetDungeonTeleportSpell(mapID)
@@ -178,8 +228,29 @@ function Addon:RefreshRoster()
 		end
 	end
 
+	local groupMembers = {}
+	for _, id in ipairs(self.rosterOrder) do
+		groupMembers[#groupMembers + 1] = id:lower()
+	end
+	table.sort(groupMembers)
+	local groupSignature = table.concat(groupMembers, ";")
+	if self.groupSignature and self.groupSignature ~= groupSignature then
+		wipe(self.drawnCycle)
+		self.fateLockUntil = nil
+		self.currentRollID = nil
+		self.pendingVote = nil
+	end
+	self.groupSignature = groupSignature
+
+	for sender in pairs(self.peerStates) do
+		if not self:IsCurrentGroupMember(sender) then
+			self.peerStates[sender] = nil
+		end
+	end
+
 	self:UpdateOwnKey(false)
 	self:RefreshUI()
+	self:ScheduleWheelStateBroadcast()
 end
 
 function Addon:ResolvePlayer(name)
@@ -203,11 +274,11 @@ end
 function Addon:UpdateEntry(playerName, level, mapID, source, rating)
 	local id, displayName, classFile, inRoster = self:ResolvePlayer(playerName)
 	if not id then
-		self:DebugLog("Eintrag ohne Spieler-ID verworfen (Quelle %s).", source or "?")
+		self:DebugLog(L.DEBUG_ENTRY_NO_ID, source or "?")
 		return false
 	end
 	if source ~= "manual" and not inRoster then
-		self:DebugLog("%s von %s verworfen: Spieler nicht im Gruppen-Roster.", source or "?", displayName or "?")
+		self:DebugLog(L.DEBUG_NOT_IN_ROSTER, source or "?", displayName or "?")
 		return false
 	end
 
@@ -229,9 +300,10 @@ function Addon:UpdateEntry(playerName, level, mapID, source, rating)
 		source = source,
 		seen = GetTime(),
 	}
-	self:DebugLog("%s: %s meldet +%d / Map %d.", source, displayName, level, mapID)
+	self:DebugLog(L.DEBUG_KEY_REPORTED, source, displayName, level, mapID)
 
 	self:RefreshUI()
+	self:ScheduleWheelStateBroadcast()
 	return true
 end
 
@@ -255,6 +327,80 @@ function Addon:GetIgnoreKey(id, level, mapID)
 	return ("%s|%d|%d"):format(tostring(id):lower(), SafeNumber(mapID), SafeNumber(level))
 end
 
+function Addon:GetEntrySignature(entry)
+	if not entry then
+		return nil
+	end
+	return self:GetIgnoreKey(entry.id or entry.displayName or "?", entry.level, entry.mapID)
+end
+
+function Addon:IsEntryDrawn(entry)
+	local signature = self:GetEntrySignature(entry)
+	return signature and self.drawnCycle[signature] == true or false
+end
+
+function Addon:MarkEntryDrawn(entry)
+	local signature = self:GetEntrySignature(entry)
+	if signature then
+		self.drawnCycle[signature] = true
+	end
+end
+
+function Addon:GetSpinEligibleIndices(entries, resetCycle)
+	local eligible, allowed = {}, {}
+	local cycleReset = false
+	for index, entry in ipairs(entries or {}) do
+		if not entry.ignored then
+			allowed[#allowed + 1] = index
+			if not self.db.noRepeat or not self:IsEntryDrawn(entry) then
+				eligible[#eligible + 1] = index
+			end
+		end
+	end
+
+	if self.db.noRepeat and #allowed > 0 and #eligible == 0 and resetCycle then
+		wipe(self.drawnCycle)
+		cycleReset = true
+		for _, entry in ipairs(entries or {}) do
+			entry.drawn = false
+		end
+		for _, index in ipairs(allowed) do
+			eligible[#eligible + 1] = index
+		end
+		self:Print(L.NO_REPEAT_NEW_ROUND)
+	end
+	return eligible, allowed, cycleReset
+end
+
+function Addon:AddResultHistory(entry, rollID, selectedBy)
+	if not entry or not self.db or type(self.db.history) ~= "table" then
+		return
+	end
+	if rollID and self.db.history[1] and self.db.history[1].rollID == rollID then
+		return
+	end
+
+	table.insert(self.db.history, 1, {
+		rollID = rollID,
+		displayName = entry.displayName,
+		level = SafeNumber(entry.level),
+		mapID = SafeNumber(entry.mapID),
+		dungeonName = entry.dungeonName,
+		selectedBy = selectedBy and (ShortName(selectedBy) or selectedBy) or nil,
+		time = GetServerTime(),
+	})
+	while #self.db.history > 3 do
+		table.remove(self.db.history)
+	end
+end
+
+function Addon:ClearResultHistory()
+	wipe(self.db.history)
+	wipe(self.drawnCycle)
+	self:Print(L.HISTORY_RESET_DONE)
+	self:RefreshUI()
+end
+
 function Addon:IsKeyIgnored(entry)
 	if not entry or not self.db or type(self.db.ignoredKeys) ~= "table" then
 		return false
@@ -270,11 +416,11 @@ function Addon:ToggleKeyIgnored(entry)
 	local ignoreKey = self:GetIgnoreKey(entry.id, entry.level, entry.mapID)
 	local ignored = not self.db.ignoredKeys[ignoreKey]
 	self.db.ignoredKeys[ignoreKey] = ignored or nil
-	self:Print(("%s: +%d %s wird %s."):format(
+	self:Print(L.IGNORE_TOGGLE:format(
 		entry.displayName,
 		entry.level,
 		entry.dungeonName,
-		ignored and "beim Drehen ignoriert" or "wieder berücksichtigt"
+		ignored and L.IGNORE_ON or L.IGNORE_OFF
 	))
 	self:RefreshUI()
 end
@@ -320,6 +466,127 @@ function Addon:GetActiveKeys()
 		AddEntry(id)
 	end
 	return result
+end
+
+function Addon:GetWheelPoolState()
+	local signatures = {}
+	for index, entry in ipairs(self:GetActiveKeys()) do
+		if index > MAX_WHEEL_KEYS then
+			break
+		end
+		signatures[#signatures + 1] = self:GetEntrySignature(entry)
+	end
+	table.sort(signatures)
+	return HashText(table.concat(signatures, ";")), #signatures
+end
+
+function Addon:PrunePeerStates()
+	local now = GetTime()
+	for sender, state in pairs(self.peerStates) do
+		if not self:IsCurrentGroupMember(sender)
+			or not state.seen
+			or now - state.seen > PEER_STATE_MAX_AGE then
+			self.peerStates[sender] = nil
+		end
+	end
+end
+
+function Addon:GetSyncStatus()
+	self:PrunePeerStates()
+	local ownHash, ownCount = self:GetWheelPoolState()
+	local matching, total = 1, 1
+	for _, state in pairs(self.peerStates) do
+		total = total + 1
+		if state.hash == ownHash and state.count == ownCount then
+			matching = matching + 1
+		end
+	end
+	return matching, total, ownHash, ownCount
+end
+
+function Addon:GetSyncDetails()
+	self:PrunePeerStates()
+	local ownHash, ownCount = self:GetWheelPoolState()
+	local details = {}
+	for sender, state in pairs(self.peerStates) do
+		details[#details + 1] = {
+			name = ShortName(state.name or sender) or state.name or sender,
+			matches = state.hash == ownHash and state.count == ownCount,
+			count = state.count,
+			version = state.version,
+		}
+	end
+	table.sort(details, function(left, right)
+		return left.name < right.name
+	end)
+	return details, ownCount
+end
+
+function Addon:SendWheelCommand(kind, ...)
+	local channel = GroupChannel()
+	if not channel then
+		return false
+	end
+
+	local fields = { "KW", WHEEL_PROTOCOL_VERSION, kind }
+	for index = 1, select("#", ...) do
+		local value = tostring(select(index, ...) or ""):gsub(";", "")
+		fields[#fields + 1] = value
+	end
+	C_ChatInfo.SendAddonMessage(self.LIB_PREFIX, table.concat(fields, ";"), channel)
+	return true
+end
+
+function Addon:BroadcastWheelState(force)
+	if not IsInGroup() then
+		return
+	end
+	local hash, count = self:GetWheelPoolState()
+	local stateKey = hash .. ":" .. count
+	local now = GetTime()
+	if not force and self.lastBroadcastState == stateKey
+		and self.lastStateBroadcastAt
+		and now - self.lastStateBroadcastAt < 8 then
+		return
+	end
+
+	local version = "?"
+	if C_AddOns and C_AddOns.GetAddOnMetadata then
+		version = C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version") or "?"
+	elseif GetAddOnMetadata then
+		version = GetAddOnMetadata(ADDON_NAME, "Version") or "?"
+	end
+	if self:SendWheelCommand("STATE", hash, count, version) then
+		self.lastBroadcastState = stateKey
+		self.lastStateBroadcastAt = now
+	end
+end
+
+function Addon:ScheduleWheelStateBroadcast(force)
+	if not self.initialized or not IsInGroup() then
+		return
+	end
+	if self.stateBroadcastTimer then
+		if force then
+			self.pendingForcedStateBroadcast = true
+		end
+		return
+	end
+	self.pendingForcedStateBroadcast = force == true
+	self.stateBroadcastTimer = C_Timer.NewTimer(0.45, function()
+		Addon.stateBroadcastTimer = nil
+		local shouldForce = Addon.pendingForcedStateBroadcast
+		Addon.pendingForcedStateBroadcast = nil
+		Addon:BroadcastWheelState(shouldForce)
+	end)
+end
+
+function Addon:RequestWheelStates()
+	if not IsInGroup() then
+		return
+	end
+	self:SendWheelCommand("SYNCREQ", self:NewMessageID())
+	self:ScheduleWheelStateBroadcast(true)
 end
 
 function Addon:GetOwnKeyInfo()
@@ -375,7 +642,7 @@ function Addon:TryAttachLibKeystone()
 		end
 	end)
 	self.libRegistered = true
-	self:DebugLog("LibKeystone-Callback registriert.")
+	self:DebugLog(L.DEBUG_LIB_CALLBACK)
 end
 
 function Addon:RequestLibKeystone()
@@ -396,11 +663,12 @@ function Addon:RequestAll(force)
 
 	self:UpdateOwnKey(false)
 	local channel = GroupChannel()
-	self:DebugLog("Abfrage gestartet; Gruppenkanal=%s.", channel or "keiner")
+	self:DebugLog(L.DEBUG_REQUEST_CHANNEL, channel or L.NONE)
 	if IsInGroup() and not IsInRaid() then
 		self:BroadcastOwnKey("PARTY")
 	end
 	self:RequestLibKeystone()
+	self:RequestWheelStates()
 	self:RefreshUI()
 end
 
@@ -426,11 +694,11 @@ end
 function Addon:AddManualKey(playerName, link)
 	playerName = strtrim(playerName or "")
 	if playerName == "" then
-		return false, "Bitte einen Spielernamen angeben."
+		return false, L.ERROR_PLAYER_REQUIRED
 	end
 	local level, mapID = self:ParseKeystoneLink(link)
 	if not level then
-		return false, "Kein gültiger Keystone-Link erkannt."
+		return false, L.ERROR_KEYSTONE_LINK
 	end
 	self:UpdateEntry(playerName, level, mapID, "manual", 0)
 	return true
@@ -462,14 +730,121 @@ end
 function Addon:AskForLinks()
 	local channel = GroupChannel()
 	if not channel then
-		self:Print("Du bist in keiner Gruppe.")
+		self:Print(L.NO_GROUP)
 		return
 	end
-	SendChatMessage("KeystoneWheel: Bitte verlinkt euren M+ Schlüssel einmal im Gruppenchat.", channel)
+	SendChatMessage(L.ASK_LINKS_CHAT, channel)
+end
+
+function Addon:GetFateLockRemaining()
+	if not self.fateLockUntil then
+		return 0
+	end
+	local remaining = self.fateLockUntil - GetTime()
+	if remaining <= 0 then
+		self.fateLockUntil = nil
+		self.currentRollID = nil
+		return 0
+	end
+	return remaining
+end
+
+function Addon:StartFateLock(rollID, duration)
+	duration = math.max(0, math.min(SafeNumber(duration), 60))
+	if duration <= 0 then
+		self.fateLockUntil = nil
+		self.currentRollID = rollID
+		return
+	end
+	self.currentRollID = rollID
+	self.fateLockUntil = GetTime() + duration
+end
+
+function Addon:GetPendingVoteCount()
+	local vote = self.pendingVote
+	if not vote then
+		return 0, 0
+	end
+	local count = 0
+	for _ in pairs(vote.votes) do
+		count = count + 1
+	end
+	return count, vote.required
+end
+
+function Addon:RequestRerollVote()
+	local remaining = self:GetFateLockRemaining()
+	if remaining <= 0 then
+		self:RefreshUI()
+		return
+	end
+	if self.pendingVote and self.pendingVote.expires > GetTime() then
+		local count, required = self:GetPendingVoteCount()
+		self:Print(L.VOTE_ALREADY_RUNNING:format(count, required))
+		return
+	end
+
+	local _, addonUsers = self:GetSyncStatus()
+	if addonUsers < 2 then
+		self:Print(L.FATE_NO_PEER:format(
+			math.ceil(remaining)
+		))
+		return
+	end
+
+	local voteID = self:NewMessageID()
+	local required = math.max(2, math.floor(addonUsers / 2) + 1)
+	self.pendingVote = {
+		id = voteID,
+		required = required,
+		expires = GetTime() + REROLL_VOTE_SECONDS,
+		votes = { player = true },
+	}
+	self:SendWheelCommand("VOTE", voteID, required)
+	self:Print(L.VOTE_STARTED:format(required))
+	self:RefreshUI()
+
+	C_Timer.After(REROLL_VOTE_SECONDS + 0.2, function()
+		if Addon.pendingVote and Addon.pendingVote.id == voteID then
+			Addon.pendingVote = nil
+			Addon:Print(L.VOTE_EXPIRED)
+			Addon:RefreshUI()
+		end
+	end)
+end
+
+function Addon:SendRerollVoteYes(voteID)
+	if type(voteID) ~= "string" or not voteID:match("^[%w%-]+$") then
+		return
+	end
+	self:SendWheelCommand("VOTEYES", voteID)
+	self:Print(L.VOTE_SENT)
+end
+
+function Addon:AcceptRerollVote(sender, voteID)
+	local vote = self.pendingVote
+	if not vote or vote.id ~= voteID or vote.expires <= GetTime() then
+		return
+	end
+	vote.votes[sender:lower()] = true
+	local count, required = self:GetPendingVoteCount()
+	self:RefreshUI()
+	if count < required then
+		return
+	end
+
+	self.pendingVote = nil
+	self.fateLockUntil = nil
+	self:SendWheelCommand("UNLOCK", voteID)
+	self:Print(L.VOTE_MAJORITY:format(count, required))
+	self:RefreshUI()
+	C_Timer.After(0.15, function()
+		Addon:Spin(true)
+	end)
 end
 
 function Addon:AnnounceWinner(entry)
-	local message = ("Das Rad wählt %s: +%d %s!"):format(entry.displayName, entry.level, entry.dungeonName)
+	local message = L.WINNER_MESSAGE:format(entry.displayName, entry.level, entry.dungeonName)
 	local channel = GroupChannel()
 	if self.db.announce and channel then
 		SendChatMessage("KeystoneWheel: " .. message, channel)
@@ -498,7 +873,7 @@ function Addon:IsCurrentGroupMember(playerName)
 	return shortName and self.roster[shortName:lower()] ~= nil
 end
 
-function Addon:BroadcastWinner(entry)
+function Addon:BroadcastWinner(entry, rollID, lockSeconds)
 	local channel = GroupChannel()
 	if not channel or not entry then
 		return
@@ -508,20 +883,14 @@ function Addon:BroadcastWinner(entry)
 	local level = SafeNumber(entry.level)
 	local mapID = SafeNumber(entry.mapID)
 	if winnerID == "" or level <= 0 or mapID <= 0 then
-		self:DebugLog("Dreh-Synchronisierung nicht gesendet: ungültiges Ergebnis.")
+		self:DebugLog(L.DEBUG_ROLL_SEND_INVALID)
 		return
 	end
 
-	local rollID = ("%d-%04d"):format(GetServerTime(), math.random(0, 9999))
-	local message = ("KW;%s;ROLL;%s;%s;%d;%d"):format(
-		WHEEL_PROTOCOL_VERSION,
-		rollID,
-		winnerID,
-		level,
-		mapID
-	)
-	C_ChatInfo.SendAddonMessage(self.LIB_PREFIX, message, channel)
-	self:DebugLog("Dreh %s über %s synchronisiert: %s +%d/%d.", rollID, channel, winnerID, level, mapID)
+	rollID = rollID or self:NewMessageID()
+	lockSeconds = math.max(0, math.min(SafeNumber(lockSeconds), 60))
+	self:SendWheelCommand("ROLL", rollID, winnerID, level, mapID, lockSeconds)
+	self:DebugLog(L.DEBUG_ROLL_SENT, rollID, channel, winnerID, level, mapID)
 end
 
 function Addon:HandleWheelMessage(message, channel, sender)
@@ -532,63 +901,133 @@ function Addon:HandleWheelMessage(message, channel, sender)
 		return
 	end
 
-	local marker, version, kind, rollID, winnerID, level, mapID = strsplit(";", message)
-	level, mapID = tonumber(level), tonumber(mapID)
-	if marker ~= "KW" or version ~= WHEEL_PROTOCOL_VERSION or kind ~= "ROLL"
-		or type(rollID) ~= "string" or #rollID < 1 or #rollID > 32
-		or not rollID:match("^[%w%-]+$")
-		or type(winnerID) ~= "string" or winnerID == "" or #winnerID > 80
-		or not level or level < 2 or level > 99
-		or not mapID or mapID < 1 or mapID > 100000 then
-		self:DebugLog("Ungültige KeystoneWheel-Synchronisierung von %s verworfen.", sender)
+	local fields = { strsplit(";", message) }
+	local marker, version, kind = fields[1], fields[2], fields[3]
+	if marker ~= "KW" or version ~= WHEEL_PROTOCOL_VERSION or type(kind) ~= "string" then
 		return
 	end
-
-	local playerName = FullUnitName("player")
-	local senderShortName = ShortName(sender)
-	local playerShortName = ShortName(playerName)
-	if playerName and (sender:lower() == playerName:lower()
-		or (senderShortName and playerShortName and senderShortName:lower() == playerShortName:lower())) then
+	if self:IsOwnSender(sender) then
 		return
 	end
 	if not self:IsCurrentGroupMember(sender) then
-		self:DebugLog("Dreh von Nicht-Gruppenmitglied %s verworfen.", sender)
+		self:DebugLog(L.DEBUG_NON_GROUP_MESSAGE, kind, sender)
 		return
 	end
 
-	local now = GetTime()
-	self.seenRolls = self.seenRolls or {}
-	for key, seenAt in pairs(self.seenRolls) do
-		if now - seenAt > 60 then
-			self.seenRolls[key] = nil
+	if kind == "STATE" then
+		local hash = fields[4]
+		local count = tonumber(fields[5])
+		local addonVersion = fields[6]
+		if type(hash) ~= "string" or not hash:match("^[%da-f]+$") or #hash > 16
+			or not count or count < 0 or count > 20
+			or type(addonVersion) ~= "string" or #addonVersion > 20 then
+			self:DebugLog(L.DEBUG_INVALID_SYNC, sender)
+			return
+		end
+		self.peerStates[sender:lower()] = {
+			name = sender,
+			hash = hash,
+			count = math.floor(count),
+			version = addonVersion,
+			seen = GetTime(),
+		}
+		self:RefreshUI()
+		return
+	end
+
+	if kind == "SYNCREQ" then
+		local requestID = fields[4]
+		if type(requestID) ~= "string" or not requestID:match("^[%w%-]+$") or #requestID > 32 then
+			return
+		end
+		C_Timer.After(math.random() * 0.35, function()
+			Addon:BroadcastWheelState(true)
+		end)
+		return
+	end
+
+	if kind == "ROLL" then
+		local rollID, winnerID = fields[4], fields[5]
+		local level, mapID = tonumber(fields[6]), tonumber(fields[7])
+		local lockSeconds = tonumber(fields[8]) or 0
+		if type(rollID) ~= "string" or #rollID < 1 or #rollID > 32
+			or not rollID:match("^[%w%-]+$")
+			or type(winnerID) ~= "string" or winnerID == "" or #winnerID > 80
+			or not level or level < 2 or level > 99
+			or not mapID or mapID < 1 or mapID > 100000
+			or lockSeconds < 0 or lockSeconds > 60 then
+			self:DebugLog(L.DEBUG_INVALID_ROLL, sender)
+			return
+		end
+
+		local now = GetTime()
+		self.seenRolls = self.seenRolls or {}
+		for key, seenAt in pairs(self.seenRolls) do
+			if now - seenAt > 60 then
+				self.seenRolls[key] = nil
+			end
+		end
+		local rollKey = sender:lower() .. ":" .. rollID
+		if self.seenRolls[rollKey] then
+			return
+		end
+		self.seenRolls[rollKey] = now
+
+		local dungeonName, texture = self:GetDungeonInfo(mapID)
+		local winner = {
+			id = winnerID,
+			displayName = ShortName(winnerID) or winnerID,
+			level = math.floor(level),
+			mapID = math.floor(mapID),
+			dungeonName = dungeonName,
+			texture = texture,
+			source = "addon",
+		}
+		self:DebugLog(L.DEBUG_ROLL_RECEIVED, rollID, sender)
+		self:ShowSyncedWinner(winner, sender, rollID, lockSeconds)
+		return
+	end
+
+	if kind == "VOTE" then
+		local voteID = fields[4]
+		local required = tonumber(fields[5])
+		if type(voteID) ~= "string" or not voteID:match("^[%w%-]+$") or #voteID > 32
+			or not required or required < 2 or required > 5 then
+			return
+		end
+		self.seenVoteRequests = self.seenVoteRequests or {}
+		if self.seenVoteRequests[voteID] then
+			return
+		end
+		self.seenVoteRequests[voteID] = GetTime()
+		self:ShowRerollVotePrompt(sender, voteID, math.floor(required))
+		return
+	end
+
+	if kind == "VOTEYES" then
+		local voteID = fields[4]
+		if type(voteID) == "string" and voteID:match("^[%w%-]+$") and #voteID <= 32 then
+			self:AcceptRerollVote(sender, voteID)
+		end
+		return
+	end
+
+	if kind == "UNLOCK" then
+		local voteID = fields[4]
+		if type(voteID) == "string" and voteID:match("^[%w%-]+$") and #voteID <= 32 then
+			self.fateLockUntil = nil
+			self.pendingVote = nil
+			self:RefreshUI()
 		end
 	end
-	local rollKey = sender:lower() .. ":" .. rollID
-	if self.seenRolls[rollKey] then
-		return
-	end
-	self.seenRolls[rollKey] = now
-
-	local dungeonName, texture = self:GetDungeonInfo(mapID)
-	local winner = {
-		id = winnerID,
-		displayName = ShortName(winnerID) or winnerID,
-		level = math.floor(level),
-		mapID = math.floor(mapID),
-		dungeonName = dungeonName,
-		texture = texture,
-		source = "addon",
-	}
-	self:DebugLog("Synchronisierten Dreh %s von %s empfangen.", rollID, sender)
-	self:ShowSyncedWinner(winner, sender)
 end
 
 function Addon:OnAddonMessage(prefix, message, channel, sender)
 	if issecretvalue and (issecretvalue(prefix) or issecretvalue(message) or issecretvalue(channel) or issecretvalue(sender)) then
-		self:DebugLog("Geschützte Addon-Nachricht übersprungen.")
+		self:DebugLog(L.DEBUG_PROTECTED_MESSAGE)
 		return
 	end
-	self:DebugLog("Nachricht empfangen: Prefix=%s, Kanal=%s, Sender=%s.", DebugValue(prefix), DebugValue(channel), DebugValue(sender))
+	self:DebugLog(L.DEBUG_MESSAGE_RECEIVED, DebugValue(prefix), DebugValue(channel), DebugValue(sender))
 	if prefix == self.CUSTOM_PREFIX then
 		if message == "REQUEST" then
 			C_Timer.After(math.random() * 0.35, function()
@@ -653,7 +1092,7 @@ function Addon:PrintDebugReport(label)
 	local libRegistered = prefixCheck and prefixCheck(self.LIB_PREFIX)
 	local channel = GroupChannel()
 	local level, mapID, rating = self:GetOwnKeyInfo()
-	local ownDungeon = mapID > 0 and self:GetDungeonInfo(mapID) or "kein Stein"
+	local ownDungeon = mapID > 0 and self:GetDungeonInfo(mapID) or L.DEBUG_NO_KEY
 	local activeKeys = self:GetActiveKeys()
 	local ignoredCount = 0
 	for _, entry in ipairs(activeKeys) do
@@ -662,31 +1101,41 @@ function Addon:PrintDebugReport(label)
 		end
 	end
 	local _, libRevision = _G.LibStub and _G.LibStub("LibKeystone", true)
+	local syncedClients, addonClients, poolHash, poolCount = self:GetSyncStatus()
 
-	self:Print(("|cffffd45cDEBUG-BERICHT|r (%s)"):format(label or "Status"))
-	self:Print(("Version %s | Kampf=%s | Gruppe=%s | Kanal=%s"):format(
+	self:Print(L.DEBUG_REPORT_TITLE:format(label or L.DEBUG_STATUS))
+	self:Print(L.DEBUG_VERSION_LINE:format(
 		version,
 		YesNo(InCombatLockdown()),
 		YesNo(IsInGroup()),
-		channel or "keiner"
+		channel or L.NONE
 	))
-	self:Print(("Geteiltes Prefix %s: registriert=%s, Code=%s | eigenes Prefix %s: deaktiviert"):format(
+	self:Print(L.DEBUG_PREFIX_LINE:format(
 		self.LIB_PREFIX,
-		prefixCheck and YesNo(libRegistered) or "API fehlt",
+		prefixCheck and YesNo(libRegistered) or L.API_MISSING,
 		DebugValue(self.libPrefixResult),
 		self.CUSTOM_PREFIX
 	))
-	self:Print(("LibKeystone: vorhanden=%s, Callback=%s, Revision=%s"):format(
+	self:Print(L.DEBUG_LIB_LINE:format(
 		YesNo(self.libKeystone ~= nil),
 		YesNo(self.libRegistered),
 		DebugValue(libRevision)
 	))
-	self:Print(("Eigener API-Stein: +%d / Map %d (%s), Wertung %d"):format(level, mapID, ownDungeon, rating))
-	self:Print(("Roster=%d | aktive Steine=%d | ignoriert=%d | Debug live=%s"):format(
+	self:Print(L.DEBUG_OWN_KEY:format(level, mapID, ownDungeon, rating))
+	self:Print(L.DEBUG_ROSTER_LINE:format(
 		#self.rosterOrder,
 		#activeKeys,
 		ignoredCount,
 		YesNo(self.db.debug)
+	))
+	self:Print(L.DEBUG_SYNC_LINE:format(
+		syncedClients,
+		addonClients,
+		poolHash,
+		poolCount,
+		YesNo(self.db.noRepeat),
+		YesNo(self.db.fateLock),
+		YesNo(self.db.leaderOnly)
 	))
 
 	for index, id in ipairs(self.rosterOrder) do
@@ -702,37 +1151,37 @@ function Addon:PrintDebugReport(label)
 			end
 		end
 		local best = entry and self:GetBestData(entry)
-		local active = best and (("+%d/%d via %s"):format(best.level, best.mapID, best.source)) or "kein aktiver Stein"
-		self:Print(("%d. %s | online=%s | %s | Quellen: %s"):format(
+		local active = best and L.DEBUG_ACTIVE_KEY:format(best.level, best.mapID, best.source) or L.DEBUG_NO_ACTIVE_KEY
+		self:Print(L.DEBUG_MEMBER_LINE:format(
 			index,
 			rosterInfo and rosterInfo.displayName or id,
 			rosterInfo and rosterInfo.unit and YesNo(UnitIsConnected(rosterInfo.unit)) or "?",
 			active,
-			#details > 0 and table.concat(details, ", ") or "keine Antwort"
+			#details > 0 and table.concat(details, ", ") or L.DEBUG_NO_SOURCES
 		))
 	end
 	if type(self.libPrefixResult) == "number" and self.libPrefixResult > 1 then
-		self:Print(("|cffff6666WARNUNG|r Das geteilte LibKS-Prefix ist fehlgeschlagen (Code %d; 3 bedeutet meist Prefix-Limit)."):format(self.libPrefixResult))
+		self:Print(L.DEBUG_PREFIX_WARNING:format(self.libPrefixResult))
 	end
 	if IsInGroup() and #self.rosterOrder < 2 then
-		self:Print("|cffff6666WARNUNG|r WoW meldet eine Gruppe, aber das Gruppen-Roster enthält nur den eigenen Spieler.")
+		self:Print(L.DEBUG_ROSTER_WARNING)
 	end
 	if level == 0 and mapID == 0 then
-		self:Print("|cffffcc66HINWEIS|r Die WoW-API meldet für den eigenen Charakter aktuell keinen Keystone.")
+		self:Print(L.DEBUG_NO_KEY_NOTE)
 	end
-	if label == "4 Sekunden nach Abfrage" and IsInGroup() and #activeKeys == 0 then
-		self:Print("|cffff6666WARNUNG|r Nach der Abfrage wurde kein einziger aktiver Stein gefunden.")
+	if label == L.DEBUG_AFTER_REQUEST and IsInGroup() and #activeKeys == 0 then
+		self:Print(L.DEBUG_NO_KEYS_WARNING)
 	end
-	self:Print("|cff9aa8bdEnde des Debug-Berichts|r")
+	self:Print(L.DEBUG_REPORT_END)
 end
 
 function Addon:RunDebugReport()
 	self:RefreshRoster()
-	self:PrintDebugReport("vor Abfrage")
+	self:PrintDebugReport(L.DEBUG_BEFORE_REQUEST)
 	self:RequestAll(true)
-	self:Print("Neue Abfrage läuft; zweiter Bericht folgt in 4 Sekunden.")
+	self:Print(L.DEBUG_REQUEST_FOLLOWUP)
 	C_Timer.After(4, function()
-		Addon:PrintDebugReport("4 Sekunden nach Abfrage")
+		Addon:PrintDebugReport(L.DEBUG_AFTER_REQUEST)
 	end)
 end
 
@@ -750,30 +1199,49 @@ function Addon:HandleSlashCommand(message)
 		local playerName, link = rest:match("^(%S+)%s+(.+)$")
 		local ok, errorMessage = self:AddManualKey(playerName, link)
 		if not ok then
-			self:Print(errorMessage .. " Beispiel: /kwheel add Spieler [Keystone-Link]")
+			self:Print(errorMessage .. L.ADD_COMMAND_EXAMPLE)
 		end
 	elseif command == "clear" then
 		self:ClearFallbacks()
 	elseif command == "minimap" then
-		self.db.minimapAngle = 225
-		self:CreateMinimapButton()
-		self.minimapButton:Show()
-		self:UpdateMinimapButtonPosition()
+		local option = rest:lower()
+		if option == "off" or option == "aus" then
+			self.db.showMinimap = false
+			if self.minimapButton then
+				self.minimapButton:Hide()
+			end
+			self:Print(L.MINIMAP_HIDDEN)
+		else
+			self.db.showMinimap = true
+			self.db.minimapAngle = 225
+			self:CreateMinimapButton()
+			self.minimapButton:Show()
+			self:UpdateMinimapButtonPosition()
+		end
+	elseif command == "options" or command == "optionen" then
+		self:ShowUI()
+		self:ToggleOptions()
+	elseif command == "history" or command == "verlauf" then
+		if rest:lower() == "clear" or rest:lower() == "leeren" then
+			self:ClearResultHistory()
+		else
+			self:Print(L.HISTORY_COMMAND_HELP)
+		end
 	elseif command == "debug" then
 		local option = rest:lower()
 		if option == "on" or option == "an" then
 			self.db.debug = true
-			self:Print("Live-Debug ist aktiviert. Mit /kwheel debug off wieder abschalten.")
+			self:Print(L.DEBUG_ENABLED)
 		elseif option == "off" or option == "aus" then
 			self.db.debug = false
-			self:Print("Live-Debug ist deaktiviert.")
+			self:Print(L.DEBUG_DISABLED)
 		else
 			self:RunDebugReport()
 		end
 	elseif command == "" then
 		self:ToggleUI()
 	else
-		self:Print("/kwheel, /kwheel drehen, /kwheel neu, /kwheel fragen, /kwheel add <Spieler> <Link>, /kwheel clear, /kwheel minimap, /kwheel debug [on|off]")
+		self:Print(L.SLASH_HELP)
 	end
 end
 
@@ -794,12 +1262,35 @@ function Addon:Initialize()
 	if self.db.debug == nil then
 		self.db.debug = false
 	end
+	if self.db.noRepeat == nil then
+		self.db.noRepeat = false
+	end
+	if self.db.fateLock == nil then
+		self.db.fateLock = false
+	end
+	if self.db.leaderOnly == nil then
+		self.db.leaderOnly = false
+	end
+	if self.db.reducedMotion == nil then
+		self.db.reducedMotion = false
+	end
+	if self.db.showMinimap == nil then
+		self.db.showMinimap = true
+	end
+	self.db.uiScale = tonumber(self.db.uiScale) or 1
+	self.db.uiScale = math.max(0.75, math.min(self.db.uiScale, 1.15))
 	if type(self.db.ignoredKeys) ~= "table" then
 		self.db.ignoredKeys = {}
 	end
+	if type(self.db.history) ~= "table" then
+		self.db.history = {}
+	end
+	while #self.db.history > 3 do
+		table.remove(self.db.history)
+	end
 
 	self.libPrefixResult = C_ChatInfo.RegisterAddonMessagePrefix(self.LIB_PREFIX)
-	self.customPrefixResult = "deaktiviert"
+	self.customPrefixResult = L.DISABLED
 
 	local events = {
 		"PLAYER_LOGIN",
@@ -829,8 +1320,14 @@ function Addon:Initialize()
 	end
 
 	self:CreateUI()
+	self:CreateAddonCompartmentEntry()
 	self:RefreshRoster()
 	self:TryAttachLibKeystone()
+	self.stateTicker = C_Timer.NewTicker(25, function()
+		if IsInGroup() then
+			Addon:BroadcastWheelState(true)
+		end
+	end)
 	C_Timer.After(1, function()
 		Addon:RequestAll(true)
 	end)
@@ -864,6 +1361,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "SPELL_UPDATE_COOLDOWN" then
 		Addon:UpdatePortButtonCooldown()
 	elseif event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
+		Addon:CreateAddonCompartmentEntry()
 		Addon:RefreshRoster()
 		Addon:UpdateMinimapButtonPosition()
 		Addon:ScheduleOwnUpdate(0.8, true)

@@ -1,12 +1,14 @@
 ## Interface: 120100, 120005, 120007
 ## Title: KeystoneWheel
-## Notes: Sammelt die M+ Schlüssel der Gruppe und lässt ein Glücksrad entscheiden.
+## Notes: Collects the group's Mythic+ keystones and lets a playful wheel decide.
+## Notes-deDE: Sammelt die M+ Schlüssel der Gruppe und lässt ein Glücksrad entscheiden.
 ## Author: KeystoneWheel contributors
-## Version: 0.3.3
+## Version: 0.4.0
 ## X-Website: https://github.com/InkVeiled/KeystoneWheel
 ## X-Source: https://github.com/InkVeiled/KeystoneWheel
 ## OptionalDeps: BigWigs, BossHelper, LibKeystone, MythicMentor
 ## SavedVariables: KeystoneWheelDB
 
+Locale.lua
 Core.lua
 UI.lua

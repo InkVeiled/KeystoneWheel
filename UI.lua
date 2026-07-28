@@ -1,4 +1,5 @@
 local _, Addon = ...
+local L = Addon.L
 
 local TWO_PI = math.pi * 2
 local POINTER_ANGLE = math.pi / 2
@@ -9,6 +10,7 @@ local TRACKING_BORDER_CROP = 0.625
 local MINIMAP_RADIUS = 5
 local KEYSTONE_ITEM_ID = 180653
 local WHEEL_TEXTURE = "Interface\\AddOns\\KeystoneWheel\\Media\\WheelBackdrop.tga"
+local RESULT_TITLE_Y_OFFSET = -12
 
 local MINIMAP_SHAPES = {
 	ROUND = { true, true, true, true },
@@ -36,11 +38,11 @@ local PALETTE = {
 }
 
 local SOURCE_SHORT = {
-	self = "ICH",
-	addon = "KW",
-	lib = "LIB",
-	chat = "CHAT",
-	manual = "MAN",
+	self = L.SOURCE_SHORT_SELF,
+	addon = L.SOURCE_SHORT_ADDON,
+	lib = L.SOURCE_SHORT_LIB,
+	chat = L.SOURCE_SHORT_CHAT,
+	manual = L.SOURCE_SHORT_MANUAL,
 }
 
 local function SetTooltip(widget, title, body)
@@ -196,9 +198,9 @@ function Addon:CreateMinimapButton()
 	button:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
 		GameTooltip:AddLine("KeystoneWheel", 1, 0.82, 0.3)
-		GameTooltip:AddLine("Linksklick: Rad öffnen oder schließen", 0.9, 0.9, 0.9)
-		GameTooltip:AddLine("Rechtsklick: Steine neu sammeln", 0.9, 0.9, 0.9)
-		GameTooltip:AddLine("Ziehen: Position ändern", 0.62, 0.72, 0.86)
+		GameTooltip:AddLine(L.OPEN_WHEEL, 0.9, 0.9, 0.9)
+		GameTooltip:AddLine(L.REFRESH_KEYS, 0.9, 0.9, 0.9)
+		GameTooltip:AddLine(L.DRAG_POSITION, 0.62, 0.72, 0.86)
 		GameTooltip:Show()
 	end)
 	button:SetScript("OnLeave", GameTooltip_Hide)
@@ -243,6 +245,70 @@ function Addon:CreateMinimapButton()
 	self:UpdateMinimapButtonPosition()
 	button:Show()
 end
+
+function Addon:CreateAddonCompartmentEntry()
+	if self.compartmentRegistered or not AddonCompartmentFrame then
+		return
+	end
+
+	local icon = C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(KEYSTONE_ITEM_ID)
+	AddonCompartmentFrame:RegisterAddon({
+		text = "KeystoneWheel",
+		icon = icon or 134400,
+		registerForAnyClick = true,
+		notCheckable = true,
+		func = function(first, second)
+			local buttonName
+			if type(second) == "table" then
+				buttonName = second.buttonName
+			elseif type(second) == "string" then
+				buttonName = second
+			elseif type(first) == "table" then
+				buttonName = first.buttonName
+			elseif first == "LeftButton" or first == "RightButton" then
+				buttonName = first
+			end
+			if buttonName == "RightButton" then
+				Addon:RequestAll(true)
+			else
+				Addon:ToggleUI()
+			end
+		end,
+		funcOnEnter = function()
+			GameTooltip:SetOwner(AddonCompartmentFrame, "ANCHOR_LEFT")
+			GameTooltip:AddLine("KeystoneWheel", 1, 0.82, 0.3)
+			GameTooltip:AddLine(L.OPEN_WHEEL, 0.9, 0.9, 0.9)
+			GameTooltip:AddLine(L.REFRESH_KEYS, 0.9, 0.9, 0.9)
+			GameTooltip:Show()
+		end,
+		funcOnLeave = function()
+			GameTooltip:Hide()
+		end,
+	})
+	self.compartmentRegistered = true
+end
+
+function Addon:ShowRerollVotePrompt(sender, voteID, required)
+	local displayName = Ambiguate(sender, "short") or sender
+	StaticPopup_Show("KEYSTONEWHEEL_REROLL_VOTE", displayName, required, {
+		voteID = voteID,
+	})
+end
+
+StaticPopupDialogs.KEYSTONEWHEEL_REROLL_VOTE = {
+	text = L.REROLL_VOTE_POPUP,
+	button1 = L.ACCEPT,
+	button2 = L.DECLINE,
+	OnAccept = function(_, data)
+		if data and data.voteID then
+			Addon:SendRerollVoteYes(data.voteID)
+		end
+	end,
+	timeout = 12,
+	whileDead = true,
+	hideOnEscape = true,
+	preferredIndex = 3,
+}
 
 function Addon:CreateSlot(parent, index)
 	local slot = CreateFrame("Button", nil, parent, "BackdropTemplate")
@@ -321,7 +387,7 @@ function Addon:CreateSlot(parent, index)
 	slot.ignoreText = slot:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	slot.ignoreText:SetDrawLayer("OVERLAY", 6)
 	slot.ignoreText:SetPoint("CENTER")
-	slot.ignoreText:SetText("IGNORIERT")
+	slot.ignoreText:SetText(L.IGNORED)
 	slot.ignoreText:SetTextColor(1, 0.34, 0.3)
 	slot.ignoreText:Hide()
 
@@ -334,18 +400,21 @@ function Addon:CreateSlot(parent, index)
 		local classColor = entry.classFile and RAID_CLASS_COLORS[entry.classFile]
 		GameTooltip:AddLine(entry.displayName, classColor and classColor.r or 1, classColor and classColor.g or 0.9, classColor and classColor.b or 0.7)
 		GameTooltip:AddLine(("+%d %s"):format(entry.level, entry.dungeonName), 1, 1, 1)
-		GameTooltip:AddLine("Quelle: " .. Addon:GetSourceLabel(entry.source), 0.65, 0.8, 1)
+		GameTooltip:AddLine(L.SOURCE_LINE:format(Addon:GetSourceLabel(entry.source)), 0.65, 0.8, 1)
 		if entry.rating and entry.rating > 0 then
-			GameTooltip:AddLine(("M+ Wertung: %d"):format(entry.rating), 0.76, 0.76, 0.76)
+			GameTooltip:AddLine(L.RATING_LINE:format(entry.rating), 0.76, 0.76, 0.76)
+		end
+		if Addon.db.noRepeat and entry.drawn and not entry.ignored then
+			GameTooltip:AddLine(L.ALREADY_DRAWN, 0.5, 0.72, 1)
 		end
 		GameTooltip:AddLine(
-			entry.ignored and "Linksklick: Wieder zulassen" or "Linksklick: Beim Drehen ignorieren",
+			entry.ignored and L.ALLOW_KEY or L.IGNORE_KEY,
 			entry.ignored and 0.45 or 0.72,
 			entry.ignored and 1 or 0.72,
 			entry.ignored and 0.45 or 0.72
 		)
 		if entry.source == "chat" or entry.source == "manual" then
-			GameTooltip:AddLine("Rechtsklick zum Entfernen", 0.55, 0.55, 0.55)
+			GameTooltip:AddLine(L.REMOVE_KEY, 0.55, 0.55, 0.55)
 		end
 		GameTooltip:Show()
 	end)
@@ -375,12 +444,12 @@ function Addon:CreateCenterButton(parent)
 
 	button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 	button.text:SetPoint("CENTER", 0, 2)
-	button.text:SetText("DREHEN")
+	button.text:SetText(L.SPIN)
 	button.text:SetTextColor(1, 0.82, 0.3)
 
 	button.subtext = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	button.subtext:SetPoint("TOP", button.text, "BOTTOM", 0, -3)
-	button.subtext:SetText("klick")
+	button.subtext:SetText(L.CLICK)
 	button.subtext:SetTextColor(0.75, 0.75, 0.78)
 
 	button:SetScript("OnClick", function()
@@ -391,12 +460,165 @@ function Addon:CreateCenterButton(parent)
 			self.text:SetTextColor(1, 0.91, 0.42)
 			self.subtext:SetTextColor(0.9, 0.9, 0.94)
 		end
+		if self.permissionReason or self.interactionHint then
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:AddLine(self.permissionReason and L.PERMISSION_TITLE or L.SEALED_TITLE, 1, 0.82, 0.3)
+			GameTooltip:AddLine(self.permissionReason or self.interactionHint, 0.9, 0.9, 0.9, true)
+			GameTooltip:Show()
+		end
 	end)
 	button:SetScript("OnLeave", function(self)
 		self.text:SetTextColor(1, 0.82, 0.3)
 		self.subtext:SetTextColor(0.75, 0.75, 0.78)
+		GameTooltip_Hide()
 	end)
 	return button
+end
+
+function Addon:ApplyUIScale()
+	if not self.frame then
+		return
+	end
+	local scale = tonumber(self.db.uiScale) or 1
+	scale = math.max(0.75, math.min(scale, 1.15))
+	self.db.uiScale = scale
+	self.frame:SetScale(scale)
+end
+
+function Addon:CreateOptionsUI(parent)
+	local options = CreateFrame("Frame", "KeystoneWheelOptionsFrame", parent, "BasicFrameTemplateWithInset")
+	options:SetSize(380, 360)
+	options:SetPoint("CENTER", parent, "CENTER", 0, 0)
+	options:SetFrameLevel(parent:GetFrameLevel() + 30)
+	options:EnableMouse(true)
+	options:Hide()
+	if options.TitleText then
+		options.TitleText:SetText(L.OPTIONS_TITLE)
+	end
+	self.optionsFrame = options
+
+	local section = options:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	section:SetPoint("TOPLEFT", 22, -42)
+	section:SetText(L.GAME_RULES)
+	section:SetTextColor(0.58, 0.68, 0.82)
+
+	local function AddOption(text, y, key, tooltip)
+		local checkbox = CreateCheckbox(options, text)
+		checkbox:SetPoint("TOPLEFT", 20, y)
+		checkbox:SetChecked(Addon.db[key])
+		checkbox:SetScript("OnClick", function(self)
+			Addon.db[key] = self:GetChecked() and true or false
+			Addon:RefreshUI()
+		end)
+		SetTooltip(checkbox, text, tooltip)
+		return checkbox
+	end
+
+	self.noRepeatCheckbox = AddOption(
+		L.NO_REPEAT_OPTION,
+		-56,
+		"noRepeat",
+		L.NO_REPEAT_TOOLTIP
+	)
+	self.fateLockCheckbox = AddOption(
+		L.FATE_OPTION,
+		-88,
+		"fateLock",
+		L.FATE_TOOLTIP
+	)
+	self.leaderOnlyCheckbox = AddOption(
+		L.LEADER_OPTION,
+		-120,
+		"leaderOnly",
+		L.LEADER_TOOLTIP
+	)
+	self.reducedMotionCheckbox = AddOption(
+		L.REDUCED_MOTION_OPTION,
+		-152,
+		"reducedMotion",
+		L.REDUCED_MOTION_TOOLTIP
+	)
+
+	self.minimapCheckbox = AddOption(
+		L.MINIMAP_OPTION,
+		-184,
+		"showMinimap",
+		L.MINIMAP_TOOLTIP
+	)
+	self.minimapCheckbox:SetScript("OnClick", function(self)
+		Addon.db.showMinimap = self:GetChecked() and true or false
+		if Addon.minimapButton then
+			Addon.minimapButton:SetShown(Addon.db.showMinimap)
+		end
+	end)
+
+	local displaySection = options:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	displaySection:SetPoint("TOPLEFT", 22, -229)
+	displaySection:SetText(L.DISPLAY)
+	displaySection:SetTextColor(0.58, 0.68, 0.82)
+
+	local scaleValue = options:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	scaleValue:SetPoint("TOPRIGHT", -24, -229)
+	self.scaleValueText = scaleValue
+
+	local scaleSlider = CreateFrame("Slider", "KeystoneWheelScaleSlider", options, "OptionsSliderTemplate")
+	scaleSlider:SetPoint("TOPLEFT", 30, -252)
+	scaleSlider:SetPoint("TOPRIGHT", -30, -252)
+	scaleSlider:SetMinMaxValues(0.75, 1.15)
+	scaleSlider:SetValueStep(0.05)
+	if scaleSlider.SetObeyStepOnDrag then
+		scaleSlider:SetObeyStepOnDrag(true)
+	end
+	local sliderName = scaleSlider:GetName()
+	local low = scaleSlider.Low or _G[sliderName .. "Low"]
+	local high = scaleSlider.High or _G[sliderName .. "High"]
+	local text = scaleSlider.Text or _G[sliderName .. "Text"]
+	if low then
+		low:SetText("75%")
+	end
+	if high then
+		high:SetText("115%")
+	end
+	if text then
+		text:SetText(L.WINDOW_SCALE)
+	end
+	scaleSlider:SetScript("OnValueChanged", function(_, value)
+		value = math.floor((value * 20) + 0.5) / 20
+		Addon.db.uiScale = value
+		scaleValue:SetText(("%d%%"):format(math.floor((value * 100) + 0.5)))
+		Addon:ApplyUIScale()
+	end)
+	scaleSlider:SetValue(self.db.uiScale)
+	self.scaleSlider = scaleSlider
+
+	local clearHistory = CreateButton(options, L.RESET_HISTORY, 150)
+	clearHistory:SetPoint("BOTTOMLEFT", 22, 38)
+	clearHistory:SetScript("OnClick", function()
+		Addon:ClearResultHistory()
+	end)
+	SetTooltip(clearHistory, L.RESET_HISTORY, L.RESET_HISTORY_TOOLTIP)
+
+	local compartmentNote = options:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	compartmentNote:SetPoint("BOTTOMRIGHT", -22, 45)
+	compartmentNote:SetWidth(165)
+	compartmentNote:SetJustifyH("RIGHT")
+	compartmentNote:SetText(L.COMPARTMENT_NOTE)
+end
+
+function Addon:ToggleOptions()
+	if not self.optionsFrame then
+		return
+	end
+	local shouldShow = not self.optionsFrame:IsShown()
+	if shouldShow then
+		self.noRepeatCheckbox:SetChecked(self.db.noRepeat)
+		self.fateLockCheckbox:SetChecked(self.db.fateLock)
+		self.leaderOnlyCheckbox:SetChecked(self.db.leaderOnly)
+		self.reducedMotionCheckbox:SetChecked(self.db.reducedMotion)
+		self.minimapCheckbox:SetChecked(self.db.showMinimap)
+		self.scaleSlider:SetValue(self.db.uiScale)
+	end
+	self.optionsFrame:SetShown(shouldShow)
 end
 
 function Addon:CreateUI()
@@ -430,31 +652,60 @@ function Addon:CreateUI()
 	else
 		frame:SetPoint("CENTER")
 	end
+	self:ApplyUIScale()
 
 	if frame.TitleText then
 		frame.TitleText:SetText("KeystoneWheel")
 	end
 
+	local optionsButton = CreateFrame("Button", nil, frame)
+	optionsButton:SetSize(19, 19)
+	optionsButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -31, -3)
+	optionsButton:RegisterForClicks("LeftButtonUp")
+	local optionsIcon = optionsButton:CreateTexture(nil, "ARTWORK")
+	optionsIcon:SetPoint("CENTER")
+	optionsIcon:SetSize(17, 17)
+	optionsIcon:SetTexture("Interface\\Buttons\\UI-OptionsButton")
+	optionsButton.icon = optionsIcon
+	local optionsHighlight = optionsButton:CreateTexture(nil, "HIGHLIGHT")
+	optionsHighlight:SetAllPoints(optionsIcon)
+	optionsHighlight:SetTexture("Interface\\Buttons\\UI-OptionsButton")
+	optionsHighlight:SetBlendMode("ADD")
+	optionsHighlight:SetAlpha(0.45)
+	optionsButton:SetScript("OnMouseDown", function(self)
+		self.icon:ClearAllPoints()
+		self.icon:SetPoint("CENTER", 1, -1)
+	end)
+	optionsButton:SetScript("OnMouseUp", function(self)
+		self.icon:ClearAllPoints()
+		self.icon:SetPoint("CENTER")
+	end)
+	optionsButton:SetScript("OnClick", function()
+		Addon:ToggleOptions()
+	end)
+	SetTooltip(optionsButton, L.OPTIONS, L.OPTIONS_TOOLTIP)
+	self.optionsButton = optionsButton
+
 	local flavor = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	flavor:SetPoint("TOP", 0, -34)
-	flavor:SetText("Fünf Steine rein. Ein Abenteuer raus.")
+	flavor:SetText(L.FLAVOR)
 	flavor:SetTextColor(0.75, 0.76, 0.82)
 
-	local refreshButton = CreateButton(frame, "Neu sammeln", 112)
+	local refreshButton = CreateButton(frame, L.REFRESH, 112)
 	refreshButton:SetPoint("TOPLEFT", 22, -53)
 	refreshButton:SetScript("OnClick", function()
 		Addon:RequestAll(true)
 	end)
-	SetTooltip(refreshButton, "Neu sammeln", "Fragt KeystoneWheel und LibKeystone erneut ab.")
+	SetTooltip(refreshButton, L.REFRESH, L.REFRESH_TOOLTIP)
 
-	local askButton = CreateButton(frame, "Im Chat fragen", 122)
+	local askButton = CreateButton(frame, L.ASK_CHAT, 122)
 	askButton:SetPoint("LEFT", refreshButton, "RIGHT", 7, 0)
 	askButton:SetScript("OnClick", function()
 		Addon:AskForLinks()
 	end)
-	SetTooltip(askButton, "Chat-Fallback", "Bittet die Gruppe, ihre Steine zu verlinken. Verlinkte Steine werden automatisch erkannt.")
+	SetTooltip(askButton, L.CHAT_FALLBACK, L.CHAT_FALLBACK_TOOLTIP)
 
-	local announceCheckbox = CreateCheckbox(frame, "Ergebnis posten")
+	local announceCheckbox = CreateCheckbox(frame, L.ANNOUNCE_RESULT)
 	announceCheckbox:SetPoint("TOPLEFT", 286, -51)
 	announceCheckbox:SetChecked(self.db.announce)
 	announceCheckbox:SetScript("OnClick", function(self)
@@ -462,7 +713,7 @@ function Addon:CreateUI()
 	end)
 	self.announceCheckbox = announceCheckbox
 
-	local soundCheckbox = CreateCheckbox(frame, "Sound")
+	local soundCheckbox = CreateCheckbox(frame, L.SOUND)
 	soundCheckbox:SetPoint("TOPLEFT", 438, -51)
 	soundCheckbox:SetChecked(self.db.sound)
 	soundCheckbox:SetScript("OnClick", function(self)
@@ -475,6 +726,39 @@ function Addon:CreateUI()
 	status:SetWidth(500)
 	status:SetJustifyH("CENTER")
 	self.statusText = status
+
+	local statusHitbox = CreateFrame("Button", nil, frame)
+	statusHitbox:SetSize(500, 18)
+	statusHitbox:SetPoint("CENTER", status, "CENTER")
+	statusHitbox:SetScript("OnClick", function()
+		Addon:RequestWheelStates()
+	end)
+	statusHitbox:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:AddLine(L.SYNC_TITLE, 1, 0.82, 0.3)
+		local details, ownCount = Addon:GetSyncDetails()
+		GameTooltip:AddLine(L.YOU_HAVE_KEYS:format(ownCount), 0.35, 1, 0.55)
+		if #details == 0 then
+			GameTooltip:AddLine(L.NO_SYNC_PEER, 0.72, 0.72, 0.76, true)
+		else
+			for _, detail in ipairs(details) do
+				GameTooltip:AddLine(
+					L.PEER_HAS_KEYS:format(
+						detail.name,
+						detail.count,
+						detail.version and (" (v" .. detail.version .. ")") or ""
+					),
+					detail.matches and 0.35 or 1,
+					detail.matches and 1 or 0.42,
+					detail.matches and 0.55 or 0.3
+				)
+			end
+		end
+		GameTooltip:AddLine(L.REFRESH_SYNC, 0.58, 0.68, 0.82)
+		GameTooltip:Show()
+	end)
+	statusHitbox:SetScript("OnLeave", GameTooltip_Hide)
+	self.statusHitbox = statusHitbox
 
 	local wheel = CreateFrame("Frame", nil, frame)
 	wheel:SetSize(510, 350)
@@ -552,7 +836,7 @@ function Addon:CreateUI()
 	portText:SetPoint("LEFT", portIcon, "RIGHT", 5, 0)
 	portText:SetPoint("RIGHT", -5, 0)
 	portText:SetJustifyH("CENTER")
-	portText:SetText("PORT")
+	portText:SetText(L.PORT)
 	portButton.text = portText
 	portButton:SetScript("OnEnter", function(self)
 		Addon:ShowPortTooltip(self)
@@ -568,10 +852,10 @@ function Addon:CreateUI()
 	self.portButton = portButton
 
 	local resultTitle = resultFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	resultTitle:SetPoint("TOPLEFT", 8, -6)
-	resultTitle:SetPoint("TOPRIGHT", resultFrame, "TOPRIGHT", -8, -6)
+	resultTitle:SetPoint("TOPLEFT", 8, RESULT_TITLE_Y_OFFSET)
+	resultTitle:SetPoint("TOPRIGHT", resultFrame, "TOPRIGHT", -8, RESULT_TITLE_Y_OFFSET)
 	resultTitle:SetJustifyH("CENTER")
-	resultTitle:SetText("BEREIT FÜR DEN DREH")
+	resultTitle:SetText(L.READY_TITLE)
 	resultTitle:SetTextColor(0.58, 0.68, 0.82)
 	self.resultTitle = resultTitle
 
@@ -579,12 +863,54 @@ function Addon:CreateUI()
 	resultText:SetPoint("TOPLEFT", resultTitle, "BOTTOMLEFT", 0, -3)
 	resultText:SetPoint("TOPRIGHT", resultTitle, "BOTTOMRIGHT", 0, -3)
 	resultText:SetJustifyH("CENTER")
-	resultText:SetText("Noch wurde niemand vom Rad auserwählt.")
+	resultText:SetText(L.READY_BODY)
 	self.resultText = resultText
+
+	local historyBar = CreateFrame("Button", nil, frame)
+	historyBar:SetSize(506, 12)
+	historyBar:SetPoint("TOP", resultFrame, "BOTTOM", 0, -2)
+	local historyText = historyBar:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	historyText:SetPoint("LEFT", 4, 0)
+	historyText:SetPoint("RIGHT", -20, 0)
+	historyText:SetJustifyH("CENTER")
+	historyText:SetWordWrap(false)
+	if historyText.SetMaxLines then
+		historyText:SetMaxLines(1)
+	end
+	historyBar.text = historyText
+	self.historyBar = historyBar
+	self.historyText = historyText
+
+	local historyClear = CreateFrame("Button", nil, historyBar, "UIPanelCloseButton")
+	historyClear:SetSize(17, 17)
+	historyClear:SetPoint("RIGHT", 0, 0)
+	historyClear:SetScript("OnClick", function()
+		Addon:ClearResultHistory()
+	end)
+	SetTooltip(historyClear, L.CLEAR_HISTORY, L.RESET_HISTORY_TOOLTIP)
+	historyBar.clearButton = historyClear
+	historyBar:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:AddLine(L.LAST_DRAWS, 1, 0.82, 0.3)
+		if #Addon.db.history == 0 then
+			GameTooltip:AddLine(L.NO_HISTORY, 0.72, 0.72, 0.76)
+		else
+			for index, entry in ipairs(Addon.db.history) do
+				GameTooltip:AddLine(L.HISTORY_TOOLTIP_LINE:format(
+					index,
+					entry.level or 0,
+					entry.dungeonName or ("Dungeon " .. tostring(entry.mapID or "?")),
+					entry.displayName or "?"
+				), 0.86, 0.86, 0.9)
+			end
+		end
+		GameTooltip:Show()
+	end)
+	historyBar:SetScript("OnLeave", GameTooltip_Hide)
 
 	local manualLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 	manualLabel:SetPoint("TOPLEFT", 22, -535)
-	manualLabel:SetText("MANUELLER FALLBACK")
+	manualLabel:SetText(L.MANUAL_FALLBACK)
 	manualLabel:SetTextColor(0.58, 0.68, 0.82)
 
 	local nameEdit = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
@@ -596,7 +922,7 @@ function Addon:CreateUI()
 
 	local namePlaceholder = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 	namePlaceholder:SetPoint("LEFT", nameEdit, "LEFT", 7, 0)
-	namePlaceholder:SetText("Spieler")
+	namePlaceholder:SetText(L.PLAYER)
 
 	local linkEdit = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
 	linkEdit:SetSize(282, 25)
@@ -606,7 +932,7 @@ function Addon:CreateUI()
 
 	local linkPlaceholder = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 	linkPlaceholder:SetPoint("LEFT", linkEdit, "LEFT", 7, 0)
-	linkPlaceholder:SetText("Keystone-Link hier einfügen")
+	linkPlaceholder:SetText(L.KEYSTONE_PLACEHOLDER)
 
 	local function UpdatePlaceholder(editBox, placeholder)
 		placeholder:SetShown(editBox:GetText() == "" and not editBox:HasFocus())
@@ -630,13 +956,13 @@ function Addon:CreateUI()
 		UpdatePlaceholder(self, linkPlaceholder)
 	end)
 
-	local addButton = CreateButton(frame, "Hinzufügen", 92)
+	local addButton = CreateButton(frame, L.ADD, 92)
 	addButton:SetPoint("LEFT", linkEdit, "RIGHT", 8, 0)
 	addButton:SetScript("OnClick", function()
 		local ok, errorMessage = Addon:AddManualKey(nameEdit:GetText(), linkEdit:GetText())
 		if ok then
 			linkEdit:SetText("")
-			Addon:Print("Stein zum Rad hinzugefügt.")
+			Addon:Print(L.KEY_ADDED)
 		else
 			Addon:Print(errorMessage)
 		end
@@ -660,7 +986,7 @@ function Addon:CreateUI()
 	footer:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 22, 19)
 	footer:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -22, 19)
 	footer:SetJustifyH("CENTER")
-	footer:SetText("Direkt  >  LibKeystone  >  Chat  >  Manuell  |  /kwheel")
+	footer:SetText(L.FOOTER)
 
 	self.confetti = {}
 	for index = 1, 28 do
@@ -673,7 +999,9 @@ function Addon:CreateUI()
 		self.confetti[index] = particle
 	end
 
+	self:CreateOptionsUI(frame)
 	self:CreateMinimapButton()
+	self.minimapButton:SetShown(self.db.showMinimap)
 	self:RefreshUI()
 end
 
@@ -699,6 +1027,7 @@ function Addon:ApplySlotEntry(slot, entry)
 	slot.source:SetText(SOURCE_SHORT[entry.source] or "?")
 	slot.ignoreOverlay:SetShown(entry.ignored)
 	slot.ignoreText:SetShown(entry.ignored)
+	slot:SetAlpha(self.db.noRepeat and entry.drawn and not entry.ignored and 0.62 or 1)
 	slot:Show()
 end
 
@@ -732,12 +1061,12 @@ function Addon:ShowPortTooltip(button)
 	if GameTooltip.SetSpellByID then
 		GameTooltip:SetSpellByID(button.teleportSpellID)
 	else
-		GameTooltip:AddLine("Dungeon-Teleport", 1, 0.82, 0.3)
+		GameTooltip:AddLine(L.TELEPORT_TITLE, 1, 0.82, 0.3)
 	end
 	if not button.teleportKnown then
-		GameTooltip:AddLine("Dieser Teleport ist noch nicht freigeschaltet.", 1, 0.35, 0.35, true)
+		GameTooltip:AddLine(L.TELEPORT_UNKNOWN, 1, 0.35, 0.35, true)
 	elseif InCombatLockdown and InCombatLockdown() then
-		GameTooltip:AddLine("Im Kampf nicht verfügbar.", 1, 0.35, 0.35)
+		GameTooltip:AddLine(L.TELEPORT_COMBAT, 1, 0.35, 0.35)
 	else
 		local cooldownInfo = C_Spell and C_Spell.GetSpellCooldown
 			and C_Spell.GetSpellCooldown(button.teleportSpellID)
@@ -746,9 +1075,9 @@ function Addon:ShowPortTooltip(button)
 			and IsSafeNumber(cooldownInfo.startTime)
 			and math.max(0, cooldownInfo.startTime + cooldownInfo.duration - GetTime())
 		if remaining and remaining > 1.5 then
-			GameTooltip:AddLine(("Wieder bereit in %s."):format(SecondsToTime(remaining)), 1, 0.76, 0.25)
+			GameTooltip:AddLine(L.TELEPORT_COOLDOWN:format(SecondsToTime(remaining)), 1, 0.76, 0.25)
 		else
-			GameTooltip:AddLine("Bereit zum Teleport.", 0.35, 1, 0.55)
+			GameTooltip:AddLine(L.TELEPORT_READY, 0.35, 1, 0.55)
 		end
 	end
 	GameTooltip:Show()
@@ -781,11 +1110,11 @@ function Addon:UpdateResultLayout(showPortButton)
 	end
 
 	self.resultTitle:ClearAllPoints()
-	self.resultTitle:SetPoint("TOPLEFT", self.resultFrame, "TOPLEFT", 8, -6)
+	self.resultTitle:SetPoint("TOPLEFT", self.resultFrame, "TOPLEFT", 8, RESULT_TITLE_Y_OFFSET)
 	if showPortButton then
-		self.resultTitle:SetPoint("TOPRIGHT", self.portButton, "TOPLEFT", -7, -6)
+		self.resultTitle:SetPoint("TOPRIGHT", self.portButton, "TOPLEFT", -7, RESULT_TITLE_Y_OFFSET)
 	else
-		self.resultTitle:SetPoint("TOPRIGHT", self.resultFrame, "TOPRIGHT", -8, -6)
+		self.resultTitle:SetPoint("TOPRIGHT", self.resultFrame, "TOPRIGHT", -8, RESULT_TITLE_Y_OFFSET)
 	end
 end
 
@@ -827,7 +1156,7 @@ function Addon:UpdatePortButton(entry)
 	button.teleportKnown = known
 	button.icon:SetTexture(spellInfo and spellInfo.iconID or 134414)
 	button.icon:SetDesaturated(not known)
-	button.text:SetText("PORT")
+	button.text:SetText(L.PORT)
 	button:Show()
 	self:UpdateResultLayout(true)
 
@@ -902,6 +1231,91 @@ function Addon:FindWheelWinnerIndex(winner)
 	end
 end
 
+function Addon:UpdateHistoryDisplay()
+	if not self.historyBar or not self.historyText then
+		return
+	end
+	local parts = {}
+	for _, entry in ipairs(self.db.history or {}) do
+		parts[#parts + 1] = ("+%d %s (%s)"):format(
+			entry.level or 0,
+			entry.dungeonName or ("Dungeon " .. tostring(entry.mapID or "?")),
+			entry.displayName or "?"
+		)
+	end
+	if #parts == 0 then
+		self.historyText:SetText(L.HISTORY_EMPTY)
+		self.historyBar.clearButton:Hide()
+	else
+		self.historyText:SetText(L.HISTORY_PREFIX .. table.concat(parts, "  |  "))
+		self.historyBar.clearButton:Show()
+	end
+end
+
+function Addon:UpdateCenterButtonState()
+	if not self.centerButton then
+		return
+	end
+
+	local entries = self.wheelEntries or {}
+	local eligible, allowed = self:GetSpinEligibleIndices(entries, false)
+	self.currentEligibleCount = #eligible
+	self.currentAllowedCount = #allowed
+	self.centerButton.permissionReason = nil
+	self.centerButton.interactionHint = nil
+
+	local canSpin, reason = self:CanPlayerSpin()
+	if not canSpin then
+		self.centerButton:Disable()
+		self.centerButton.text:SetText(L.CENTER_LEADER)
+		self.centerButton.subtext:SetText(L.CENTER_MAY_SPIN)
+		self.centerButton:SetAlpha(0.55)
+		self.centerButton.permissionReason = reason
+		return
+	end
+
+	local voteCount, voteRequired = self:GetPendingVoteCount()
+	if voteRequired > 0 then
+		self.centerButton:Disable()
+		self.centerButton.text:SetText(L.CENTER_VOTES)
+		self.centerButton.subtext:SetText(("%d/%d"):format(voteCount, voteRequired))
+		self.centerButton:SetAlpha(0.7)
+		return
+	end
+
+	local lockRemaining = self:GetFateLockRemaining()
+	if lockRemaining > 0 then
+		self.centerButton:Enable()
+		self.centerButton.text:SetText(L.CENTER_SEALED)
+		self.centerButton.subtext:SetText(L.CENTER_SEALED_SUB:format(math.ceil(lockRemaining)))
+		self.centerButton:SetAlpha(0.86)
+		self.centerButton.interactionHint = L.CENTER_SEALED_HINT
+		return
+	end
+
+	if #entries == 0 then
+		self.centerButton:Disable()
+		self.centerButton.text:SetText(L.CENTER_EMPTY)
+		self.centerButton.subtext:SetText(L.CENTER_COLLECT)
+		self.centerButton:SetAlpha(0.55)
+	elseif #allowed == 0 then
+		self.centerButton:Disable()
+		self.centerButton.text:SetText(L.CENTER_PAUSED)
+		self.centerButton.subtext:SetText(L.CENTER_ALL_IGNORED)
+		self.centerButton:SetAlpha(0.55)
+	elseif #eligible == 0 and self.db.noRepeat then
+		self.centerButton:Enable()
+		self.centerButton.text:SetText(L.CENTER_NEW_ROUND)
+		self.centerButton.subtext:SetText(L.CENTER_ALL_DRAWN)
+		self.centerButton:SetAlpha(1)
+	else
+		self.centerButton:Enable()
+		self.centerButton.text:SetText(self.selectedWinner and L.CENTER_AGAIN or L.SPIN)
+		self.centerButton.subtext:SetText(self.selectedWinner and L.CENTER_WHY_NOT or L.CLICK)
+		self.centerButton:SetAlpha(1)
+	end
+end
+
 function Addon:RefreshUI()
 	if not self.frame or self.spinning then
 		return
@@ -917,14 +1331,25 @@ function Addon:RefreshUI()
 	local ignoredCount = 0
 	for _, entry in ipairs(entries) do
 		sourceCounts[entry.source] = (sourceCounts[entry.source] or 0) + 1
+		entry.drawn = self:IsEntryDrawn(entry)
 		if entry.ignored then
 			ignoredCount = ignoredCount + 1
 		end
 	end
 	local eligibleCount = #entries - ignoredCount
+	local syncedClients, addonClients = self:GetSyncStatus()
+	local syncColor
+	if addonClients == 1 then
+		syncColor = "ff9aa8bd"
+	elseif syncedClients == addonClients then
+		syncColor = "ff65d99b"
+	else
+		syncColor = "ffff6f61"
+	end
+	local syncLabel = ("|c%sSync %d/%d|r"):format(syncColor, syncedClients, addonClients)
 
 	local rosterSize = math.max(#self.rosterOrder, #entries)
-	self.statusText:SetText(("%d/%d Steine | Aktiv %d | Ignoriert %d | Direkt %d Lib %d Chat %d Manuell %d"):format(
+	self.statusText:SetText(L.STATUS_LINE:format(
 		#entries,
 		rosterSize,
 		eligibleCount,
@@ -932,7 +1357,8 @@ function Addon:RefreshUI()
 		sourceCounts.addon + sourceCounts.self,
 		sourceCounts.lib,
 		sourceCounts.chat,
-		sourceCounts.manual
+		sourceCounts.manual,
+		syncLabel
 	))
 	if self.minimapButton then
 		self.minimapButton.count:SetText(#entries)
@@ -953,26 +1379,14 @@ function Addon:RefreshUI()
 	local selectedIndex = self:FindWheelWinnerIndex(self.selectedWinner)
 	self.winnerIndex = selectedIndex
 	self:SetSelectedSlot(selectedIndex, selectedIndex)
-	if eligibleCount > 0 then
-		self.centerButton:Enable()
-		self.centerButton.text:SetText("DREHEN")
-		self.centerButton.subtext:SetText("klick")
-		self.centerButton:SetAlpha(1)
-	elseif #entries > 0 then
-		self.centerButton:Disable()
-		self.centerButton.text:SetText("PAUSIERT")
-		self.centerButton.subtext:SetText("alle ignoriert")
-		self.centerButton:SetAlpha(0.55)
-	else
-		self.centerButton:Disable()
-		self.centerButton.text:SetText("LEER")
-		self.centerButton.subtext:SetText("erst sammeln")
-		self.centerButton:SetAlpha(0.55)
-	end
+	self:UpdateHistoryDisplay()
+	self:UpdateCenterButtonState()
 end
 
 function Addon:PlayTick()
-	self.pointerBounce = 1
+	if not self.db.reducedMotion then
+		self.pointerBounce = 1
+	end
 	if not self.db.sound then
 		return
 	end
@@ -987,25 +1401,36 @@ function Addon:PlayTick()
 	end
 end
 
-function Addon:Spin()
+function Addon:Spin(ignoreFateLock)
 	if self.spinning then
+		return
+	end
+	local canSpin, reason = self:CanPlayerSpin()
+	if not canSpin then
+		self:Print(reason)
+		return
+	end
+	if not ignoreFateLock and self:GetFateLockRemaining() > 0 then
+		self:RequestRerollVote()
 		return
 	end
 	self:RefreshUI()
 	local count = #(self.wheelEntries or {})
 	if count == 0 then
-		self:Print("Noch keine Schlüssel gefunden.")
+		self:Print(L.NO_KEYS_FOUND)
 		return
 	end
-	local eligibleIndices = {}
-	for index, entry in ipairs(self.wheelEntries) do
-		if not entry.ignored then
-			eligibleIndices[#eligibleIndices + 1] = index
-		end
-	end
+	local eligibleIndices, _, cycleReset = self:GetSpinEligibleIndices(self.wheelEntries, true)
 	if #eligibleIndices == 0 then
-		self:Print("Alle gefundenen Schlüssel werden derzeit ignoriert.")
+		self:Print(L.ALL_KEYS_IGNORED)
 		return
+	end
+	if cycleReset then
+		for _, slot in ipairs(self.slots) do
+			if slot:IsShown() and slot.entry and not slot.entry.ignored then
+				slot:SetAlpha(1)
+			end
+		end
 	end
 
 	self.spinning = true
@@ -1013,11 +1438,11 @@ function Addon:Spin()
 	self:UpdatePortButton(nil)
 	self:SetSelectedSlot(nil, nil)
 	self.centerButton:Disable()
-	self.centerButton.text:SetText("DREHT...")
-	self.centerButton.subtext:SetText("viel Glück")
-	self.resultTitle:SetText("DAS RAD DREHT")
+	self.centerButton.text:SetText(L.CENTER_SPINNING)
+	self.centerButton.subtext:SetText(L.GOOD_LUCK)
+	self.resultTitle:SetText(L.WHEEL_SPINNING)
 	self.resultTitle:SetTextColor(0.58, 0.68, 0.82)
-	self.resultText:SetText("Wer wird es wohl?")
+	self.resultText:SetText(L.WHO_WILL_IT_BE)
 
 	local winnerIndex = eligibleIndices[math.random(1, #eligibleIndices)]
 	local startAngle = self.wheelAngle or 0
@@ -1026,11 +1451,12 @@ function Addon:Spin()
 	while targetAngle <= startAngle + 0.001 do
 		targetAngle = targetAngle + TWO_PI
 	end
-	targetAngle = targetAngle + TWO_PI * math.random(4, 6)
+	local rotations = self.db.reducedMotion and math.random(1, 2) or math.random(4, 6)
+	targetAngle = targetAngle + TWO_PI * rotations
 
 	self.spinAnimation = {
 		elapsed = 0,
-		duration = 4.0 + math.random() * 0.8,
+		duration = self.db.reducedMotion and (1.0 + math.random() * 0.25) or (4.0 + math.random() * 0.8),
 		startAngle = startAngle,
 		targetAngle = targetAngle,
 		winnerIndex = winnerIndex,
@@ -1038,43 +1464,36 @@ function Addon:Spin()
 	}
 end
 
-function Addon:PresentWinner(winner, winnerIndex, syncedBy)
+function Addon:PresentWinner(winner, winnerIndex, syncedBy, rollID, lockSeconds)
+	self:StartFateLock(rollID, lockSeconds)
+	self:MarkEntryDrawn(winner)
+	winner.drawn = true
+	self:AddResultHistory(winner, rollID, syncedBy)
 	self.winnerIndex = winnerIndex
 	self.selectedWinner = winner
 	self:SetSelectedSlot(winnerIndex, winnerIndex)
+	local winnerSlot = winnerIndex and self.slots[winnerIndex]
+	if winnerSlot then
+		winnerSlot:SetAlpha(1)
+	end
 
 	if syncedBy then
-		self.resultTitle:SetText(("GETEILTER DREH VON %s"):format(Ambiguate(syncedBy, "short") or syncedBy))
+		self.resultTitle:SetText(L.SHARED_SPIN_TITLE:format(Ambiguate(syncedBy, "short") or syncedBy))
 		self.resultTitle:SetTextColor(0.38, 0.78, 1)
 	else
-		self.resultTitle:SetText("DAS RAD HAT ENTSCHIEDEN")
+		self.resultTitle:SetText(L.WHEEL_DECIDED)
 		self.resultTitle:SetTextColor(1, 0.72, 0.22)
 	end
-	self.resultText:SetText(("%s  |  +%d %s"):format(winner.displayName, winner.level, winner.dungeonName))
+	self.resultText:SetText(L.RESULT_LINE:format(winner.displayName, winner.level, winner.dungeonName))
 
-	local hasEligibleEntry = false
-	for _, entry in ipairs(self.wheelEntries or {}) do
-		if not entry.ignored then
-			hasEligibleEntry = true
-			break
-		end
-	end
-	if hasEligibleEntry then
-		self.centerButton:Enable()
-		self.centerButton.text:SetText("NOCHMAL")
-		self.centerButton.subtext:SetText("warum nicht?")
-		self.centerButton:SetAlpha(1)
-	else
-		self.centerButton:Disable()
-		self.centerButton.text:SetText("ERGEBNIS")
-		self.centerButton.subtext:SetText("empfangen")
-		self.centerButton:SetAlpha(0.55)
-	end
-
+	self:UpdateHistoryDisplay()
+	self:UpdateCenterButtonState()
 	self:UpdatePortButton(winner)
 	if self.frame:IsShown() then
-		self.resultPulse = 2.5
-		self:LaunchConfetti()
+		if not self.db.reducedMotion then
+			self.resultPulse = 2.5
+			self:LaunchConfetti()
+		end
 		if self.db.sound then
 			local sound = SOUNDKIT and (SOUNDKIT.UI_BONUS_LOOT_ROLL_END or SOUNDKIT.READY_CHECK)
 			if sound then
@@ -1084,9 +1503,9 @@ function Addon:PresentWinner(winner, winnerIndex, syncedBy)
 	end
 end
 
-function Addon:ShowSyncedWinner(winner, sender)
+function Addon:ShowSyncedWinner(winner, sender, rollID, lockSeconds)
 	if self.spinning then
-		self:DebugLog("Geteilter Dreh von %s ignoriert, weil das eigene Rad gerade dreht.", sender)
+		self:DebugLog(L.DEBUG_SHARED_IGNORED, sender)
 		return
 	end
 
@@ -1099,10 +1518,10 @@ function Addon:ShowSyncedWinner(winner, sender)
 		self.wheelAngle = (-((winnerIndex - 1) * TWO_PI / count)) % TWO_PI
 		self:LayoutWheel(self.wheelAngle)
 	end
-	self:PresentWinner(winner, winnerIndex, sender)
+	self:PresentWinner(winner, winnerIndex, sender, rollID, lockSeconds)
 
 	if not wasShown then
-		self:Print(("%s hat %s: +%d %s ausgewählt."):format(
+		self:Print(L.SHARED_SELECTED:format(
 			Ambiguate(sender, "short") or sender,
 			winner.displayName,
 			winner.level,
@@ -1117,12 +1536,18 @@ function Addon:FinishSpin(animation)
 	self.wheelAngle = animation.targetAngle % TWO_PI
 	self:LayoutWheel(self.wheelAngle)
 	local winner = self.wheelEntries[animation.winnerIndex]
-	self:PresentWinner(winner, animation.winnerIndex)
+	local rollID = self:NewMessageID()
+	local lockSeconds = self.db.fateLock and self.FATE_LOCK_SECONDS or 0
+	self:PresentWinner(winner, animation.winnerIndex, nil, rollID, lockSeconds)
 	self:AnnounceWinner(winner)
-	self:BroadcastWinner(winner)
+	self:BroadcastWinner(winner, rollID, lockSeconds)
+	self:ScheduleWheelStateBroadcast()
 end
 
 function Addon:LaunchConfetti()
+	if self.db.reducedMotion then
+		return
+	end
 	for index, particle in ipairs(self.confetti) do
 		local color = PALETTE[((index - 1) % #PALETTE) + 1]
 		particle.x = math.random(-75, 75)
@@ -1181,6 +1606,14 @@ function Addon:OnUIUpdate(elapsed)
 		end
 		if progress >= 1 then
 			self:FinishSpin(animation)
+		end
+	end
+
+	self.centerStateElapsed = (self.centerStateElapsed or 0) + elapsed
+	if not self.spinning and self.centerStateElapsed >= 0.25 then
+		self.centerStateElapsed = 0
+		if self.fateLockUntil or self.pendingVote then
+			self:UpdateCenterButtonState()
 		end
 	end
 
